@@ -1,18 +1,52 @@
 
-# Pinetree Scan - 소나무재선충병 피해목 자동 탐지 파이프라인
 
-## 프로젝트 개요
-- 드론/항공 촬영 GeoTIFF 이미지에서 소나무재선충병 피해목을 딥러닝(YOLO)으로 자동 탐지
-- 피해목 위치를 위도·경도(GPS)로 변환하여 CSV로 저장
-- 공간정보(tif+tfw+prj)와 피해목 중심좌표(csv)만으로 완전 자동화
+
+# 🌲 Pinetree Scan: 소나무재선충병 피해목 자동 탐지 파이프라인
+
+<p align="left">
+  <img src="https://img.shields.io/badge/Python-3.10+-blue?logo=python" />
+  <img src="https://img.shields.io/badge/YOLOv8-ultralytics-yellowgreen?logo=github" />
+  <img src="https://img.shields.io/badge/rasterio-%23007396.svg?logo=python&logoColor=white" />
+  <img src="https://img.shields.io/badge/pandas-%23150458.svg?logo=pandas&logoColor=white" />
+  <img src="https://img.shields.io/badge/numpy-%23013243.svg?logo=numpy&logoColor=white" />
+  <img src="https://img.shields.io/badge/OS-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey" />
+</p>
+
+> **드론/항공 GeoTIFF 이미지에서 소나무재선충병 피해목을 딥러닝(YOLO)으로 자동 탐지하고, 피해목 위치를 위경도(GPS)로 변환·CSV로 저장하는 공간정보 기반 자동화 파이프라인**
 
 ---
 
-## 폴더 구조
+## 🧰 기술스택
+
+| 구분 | 내용 |
+|------|------|
+| 언어 | Python 3.10+ |
+| 딥러닝 | Ultralytics YOLOv8 |
+| 공간정보 | rasterio, affine |
+| 데이터 | pandas, numpy |
+| 기타 | pyproj(좌표계 변환), argparse 등 |
+
+---
+
+---
+
+## 🚀 프로젝트 한눈에 보기
+
+- **목표**: 공간정보(GeoTIFF, tfw, prj)와 피해목 TM좌표(csv)만으로, 소나무재선충병 피해목을 YOLO로 자동 탐지 및 위치(GPS) 변환
+- **주요 기능**:
+  - 대용량 GeoTIFF → 타일 분할(자동)
+  - 피해목 TM좌표 → 픽셀 변환 → YOLO 라벨 자동 생성
+  - YOLO 학습/추론/CSV 결과 자동화
+  - 탐지 결과를 위경도(GPS)로 변환해 CSV로 저장
+- **기술스택**: Python, rasterio, pandas, numpy, Ultralytics YOLOv8
+
+---
+
+## 🗂️ 폴더 구조 (예시)
 ```
 data/
   training_images/   # 원본 GeoTIFF, tfw, prj, damaged_tree.csv(피해목 TM좌표)
-  tiles/images/      # 1024x1024 타일 이미지 (자동 생성)
+  tiles/images/      # 타일 이미지 (자동 생성)
   tiles/labels/      # 타일별 YOLO 라벨(txt, 자동 생성)
   results/           # 추론 결과 CSV 등
 scripts/
@@ -23,17 +57,17 @@ scripts/
 
 ---
 
-## 주요 파이프라인
+## 🛠️ 주요 파이프라인
 
 ### 1. 타일 분할 및 라벨 자동 생성
 - `scripts/tile_and_label.py` 실행
-- 원본 tif를 4096x4096 타일로 분할, 각 타일별 YOLO 라벨(txt) 자동 생성
+- 원본 tif를 타일(1024/4096px)로 분할, 각 타일별 YOLO 라벨(txt) 자동 생성
 - **rasterio** 라이브러리 사용 (Pillow 아님)
 
 ### 2. YOLO 학습
 - data.yaml에서 `train: tiles/images`, `val: tiles/images`로 지정
 - `yolo detect train ...` 명령으로 학습
-- 모델 파일(`best.pt`, `last.pt`)은 `results/pinetree-damage-tiles4096/weights/`에 저장
+- 모델 파일(`best.pt`, `last.pt`)은 `results/프로젝트명/weights/`에 저장
 
 ### 3. 피해목 탐지 및 GPS 변환
 - `scripts/yolo_infer_to_gps.py` 실행
@@ -41,41 +75,23 @@ scripts/
 - 탐지된 피해목의 중심 픽셀좌표를 위경도(GPS)로 변환
 - **결과 CSV는 실행 시점의 년월일시간이 포함된 파일명으로 자동 저장**
   - 예: `damaged_trees_gps_20250718_153012.csv`
-- 기존 CSV를 덮어쓰지 않고, 실행할 때마다 새로운 결과 파일 생성
 
 ---
 
-## 주요 파일 설명
+## 📊 결과 예시
+
 | 파일/폴더 | 설명 |
 |-----------|------|
 | data/training_images/sample01.tif | 원본 GeoTIFF 이미지 |
 | data/training_images/sample01.tfw | 월드파일(좌표계) |
 | data/training_images/damaged_tree.csv | 피해목 중심 TM좌표(csv) |
-| data/tiles/images/ | 타일 이미지(4096x4096, 자동 생성) |
+| data/tiles/images/ | 타일 이미지(자동 생성) |
 | data/tiles/labels/ | 타일별 YOLO 라벨(txt, 자동 생성) |
-| results/pinetree-damage-tiles4096/weights/best.pt | 학습된 YOLO 모델 |
+| results/프로젝트명/weights/best.pt | 학습된 YOLO 모델 |
 | data/results/damaged_trees_gps_YYYYMMDD_HHMMSS.csv | 탐지 결과(GPS 좌표, 자동 생성) |
 
 ---
 
-## 자주 묻는 질문(FAQ)
-
-- **Q. damaged_trees_gps.csv는 어떻게 생성되나요?**
-  - YOLO 추론+좌표 변환 스크립트 실행 시, 탐지 결과가 년월일시간이 포함된 새 CSV로 저장됩니다.
-  - 기존 파일을 덮어쓰지 않고, 실행할 때마다 새로운 결과 파일이 생성됩니다.
-
-- **Q. 모델 파일(best.pt)은 어디에 저장되고, 어떻게 사용하나요?**
-  - `results/pinetree-damage-tiles4096/weights/best.pt`에 저장됩니다.
-  - 추론, 좌표 변환, 시각화 등 모든 후처리에 바로 사용합니다.
-  - 예시: `yolo detect predict model=.../best.pt source=...`
-
-- **Q. 타일 분할은 어떤 라이브러리로 하나요?**
-  - rasterio(공간정보 이미지 전용)를 사용합니다. Pillow는 사용하지 않습니다.
-
-- **Q. csv에 데이터가 중첩 저장되나요?**
-  - 아니요. 항상 새로 생성(덮어쓰기)되며, 실행 시점의 결과만 포함됩니다.
-
----
 
 ## 실행 예시
 
@@ -111,23 +127,36 @@ scripts/
 
 
 ### 타일 분할 및 라벨 생성
-```
+```bash
 python3 scripts/tile_and_label.py
 ```
 
 ### YOLO 학습
-```
+```bash
 yolo detect train data=data/data.yaml model=yolov8n.pt epochs=50 imgsz=640 project=results name=pinetree-damage-tiles4096
 ```
 
 ### 피해목 탐지 및 GPS 변환
-```
-python3 scripts/yolo_infer_to_gps.py --weights results/pinetree-damage-tiles4096/weights/best.pt --source data/tiles/images
+```bash
+python3 scripts/yolo_infer_to_gps.py --weights results/프로젝트명/weights/best.pt --source data/tiles/images
 # 결과: data/results/damaged_trees_gps_YYYYMMDD_HHMMSS.csv
 ```
 
 ---
 
-## 문의/참고
-- ultralytics YOLO 공식문서: https://docs.ultralytics.com/
-- rasterio 공식문서: https://rasterio.readthedocs.io/
+## 💡 FAQ & 참고
+
+- **Q. 결과 CSV는 어떻게 생성되나요?**
+  - YOLO 추론+좌표 변환 스크립트 실행 시, 탐지 결과가 년월일시간이 포함된 새 CSV로 저장됩니다.
+- **Q. 모델 파일(best.pt)은 어디에 저장되고, 어떻게 사용하나요?**
+  - `results/프로젝트명/weights/best.pt`에 저장, 추론/좌표 변환/시각화에 사용
+- **Q. 타일 분할은 어떤 라이브러리로 하나요?**
+  - rasterio(공간정보 이미지 전용) 사용
+- **Q. csv에 데이터가 중첩 저장되나요?**
+  - 아니요. 항상 새로 생성(덮어쓰기)되며, 실행 시점의 결과만 포함
+
+---
+
+## 📚 참고자료
+- [ultralytics YOLO 공식문서](https://docs.ultralytics.com/)
+- [rasterio 공식문서](https://rasterio.readthedocs.io/)
