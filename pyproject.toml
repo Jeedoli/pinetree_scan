@@ -1,0 +1,24 @@
+[tool.poetry]
+name = "pinetree-scan"
+version = "0.1.0"
+description = ""
+authors = ["BE02LEEJAEHOON <ljhx6787@naver.com>"]
+readme = "README.md"
+
+
+[tool.poetry.dependencies]
+python = "^3.10"
+tensorflow = "^2.19.0"
+opencv-python = "^4.12.0.88"
+pandas = "^2.3.1"
+exifread = "^3.3.1"
+rasterio = "^1.4.3"
+scikit-learn = "^1.7.0"
+isort = "^6.0.1"
+ultralytics = "^8.2.0"
+torch = "^2.2.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
