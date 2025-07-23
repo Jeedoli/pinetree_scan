@@ -23,8 +23,8 @@ def get_args():
     parser.add_argument(
         "--weights",
         type=str,
-        default="../models/yolo_pinetree.pt",
-        help="YOLO 모델 가중치 경로",
+        default="../models/colab_yolo/best.pt",
+        help="YOLO 모델 가중치 경로 (예: models/colab_yolo/best.pt)",
     )
     parser.add_argument(
         "--source",
@@ -34,7 +34,7 @@ def get_args():
     )
     # 오늘 날짜와 시간 포함한 기본 파일명
     now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    default_csv = f"../data/results/damaged_trees_gps_{now}.csv"
+    default_csv = f"../data/infer_results/damaged_trees_gps_{now}.csv"
     parser.add_argument("--output", type=str, default=default_csv, help="결과 CSV 경로")
     return parser.parse_args()
 
