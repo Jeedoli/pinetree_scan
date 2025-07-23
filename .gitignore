@@ -53,3 +53,4 @@ data/
 # 기타
 .env
 .DS_Store
+requirements.txt
