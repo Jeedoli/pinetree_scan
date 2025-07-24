@@ -19,6 +19,7 @@ isort = "^5.13.2"
 ultralytics = "^8.2.0"
 torch = "^2.2.0"
 folium = "^0.16.0"
+pyproj = "^3.6.1"
 
 
 [build-system]
