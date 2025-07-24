@@ -23,14 +23,14 @@ def get_args():
     parser.add_argument(
         "--weights",
         type=str,
-        default="../models/colab_yolo/best.pt",
+        default="models/colab_yolo/best.pt",
         help="YOLO 모델 가중치 경로 (예: models/colab_yolo/best.pt)",
     )
     parser.add_argument(
         "--source",
         type=str,
-        default="../data/inference_images",
-        help="인퍼런스(추론)용 이미지 폴더",
+        default="data/inference_images",
+        help="인퍼런스(추론)용 이미지 폴더 (예: data/inference_images)",
     )
     # 오늘 날짜와 시간 포함한 기본 파일명
     now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -76,11 +76,18 @@ def infer_and_save(weights, source, output):
     class_names = ["damaged", "healthy"]  # 클래스명 리스트
     damaged_count = 0  # 피해목 탐지 개수
     healthy_count = 0  # 정상목 탐지 개수
+    import cv2
+
     for fname in os.listdir(source):
         # 이미지 파일만 처리
         if not fname.lower().endswith((".tif", ".tiff", ".jpg", ".jpeg", ".png")):
             continue
         img_path = os.path.join(source, fname)
+        # 4채널 이미지는 3채널(RGB)로 변환 후 임시 저장
+        img = cv2.imread(img_path, cv2.IMREAD_UNCHANGED)
+        if img is not None and len(img.shape) == 3 and img.shape[2] == 4:
+            img_rgb = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+            cv2.imwrite(img_path, img_rgb)
         # confidence threshold를 낮춰서 박스가 아예 없는지 확인
         yolo_result = model(img_path, conf=0.01)
         for r in yolo_result:
