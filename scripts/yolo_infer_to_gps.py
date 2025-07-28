@@ -79,14 +79,20 @@ def infer_and_save(weights, source, output):
     results = []  # 결과 저장 리스트
     class_names = ["damaged", "healthy"]  # 클래스명 리스트
     damaged_count = 0  # 피해목 탐지 개수
-    healthy_count = 0  # 정상목 탐지 개수
     import cv2
 
-    for fname in os.listdir(source):
-        # 이미지 파일만 처리
-        if not fname.lower().endswith((".tif", ".tiff", ".jpg", ".jpeg", ".png")):
-            continue
-        img_path = os.path.join(source, fname)
+    # source가 파일이면 리스트로, 디렉토리면 내부 이미지 리스트로
+    if os.path.isfile(source):
+        img_files = [source]
+    else:
+        img_files = [
+            os.path.join(source, fname)
+            for fname in os.listdir(source)
+            if fname.lower().endswith((".tif", ".tiff", ".jpg", ".jpeg", ".png"))
+        ]
+
+    for img_path in img_files:
+        fname = os.path.basename(img_path)
         # 4채널 이미지는 3채널(RGB)로 변환 후 임시 저장
         img = cv2.imread(img_path, cv2.IMREAD_UNCHANGED)
         if img is not None and len(img.shape) == 3 and img.shape[2] == 4:
@@ -119,14 +125,12 @@ def infer_and_save(weights, source, output):
         out_df = pd.DataFrame(results)
         os.makedirs(os.path.dirname(output), exist_ok=True)
         out_df.to_csv(output, index=False)
-        print(f"피해목 탐지: {damaged_count}건, 정상목 탐지: {healthy_count}건")
+        print(f"피해목 탐지: {damaged_count}건")
         print(f"결과가 {output}에 저장되었습니다.")
         if damaged_count == 0:
             print("※ 피해목(0) 박스가 하나도 탐지되지 않았습니다.")
-        if healthy_count == 0:
-            print("※ 정상목(1) 박스가 하나도 탐지되지 않았습니다.")
     else:
-        print("피해목/정상목 모두 탐지되지 않았습니다.")
+        print("피해목이 탐지되지 않았습니다.")
 
 
 if __name__ == "__main__":
