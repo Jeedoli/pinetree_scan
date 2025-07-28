@@ -34,7 +34,11 @@ def get_args():
     )
     # 오늘 날짜와 시간 포함한 기본 파일명
     now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    default_csv = f"../data/infer_results/damaged_trees_gps_{now}.csv"
+    # 프로젝트 루트 기준으로 절대경로 생성
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    default_csv = os.path.join(
+        project_root, "data/infer_results", f"damaged_trees_gps_{now}.csv"
+    )
     parser.add_argument("--output", type=str, default=default_csv, help="결과 CSV 경로")
     return parser.parse_args()
 
@@ -88,12 +92,12 @@ def infer_and_save(weights, source, output):
         if img is not None and len(img.shape) == 3 and img.shape[2] == 4:
             img_rgb = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
             cv2.imwrite(img_path, img_rgb)
-        # confidence threshold를 낮춰서 박스가 아예 없는지 확인
-        yolo_result = model(img_path, conf=0.01)
+        # confidence threshold를 높이고, max_det 명시
+        yolo_result = model(img_path, conf=0.5, max_det=1000)
         for r in yolo_result:
             for box in r.boxes:
                 class_id = int(box.cls[0])  # 클래스 ID (0: 피해목, 1: 정상목)
-                if class_id in [0, 1]:
+                if class_id == 0:  # 피해목만 결과에 포함
                     xmin, ymin, xmax, ymax = box.xyxy[0].tolist()
                     x_center = (xmin + xmax) / 2
                     y_center = (ymin + ymax) / 2
@@ -109,10 +113,7 @@ def infer_and_save(weights, source, output):
                                 "class_name": class_names[class_id],
                             }
                         )
-                        if class_id == 0:
-                            damaged_count += 1
-                        elif class_id == 1:
-                            healthy_count += 1
+                        damaged_count += 1
     # 결과가 있으면 CSV로 저장
     if results:
         out_df = pd.DataFrame(results)
