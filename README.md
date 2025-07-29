@@ -1,6 +1,3 @@
-
-
-
 # 🌲 Pinetree Scan: 소나무재선충병 피해목 자동 탐지 파이프라인
 
 <p align="left">
@@ -45,7 +42,7 @@
 ## 🗂️ 폴더 구조 (예시)
 ```
 data/
-  training_images/   # 원본 GeoTIFF, tfw, prj, damaged_tree.csv(피해목 TM좌표)
+  training_images/   # 원본 GeoTIFF, tfw, prj, sample01.csv(피해목 TM좌표)
   tiles/images/      # 타일 이미지 (자동 생성)
   tiles/labels/      # 타일별 YOLO 라벨(txt, 자동 생성)
   results/           # 추론 결과 CSV 등
@@ -74,7 +71,7 @@ scripts/
 - 학습된 모델(`best.pt`)로 타일/원본 이미지 추론
 - 탐지된 피해목의 중심 픽셀좌표를 위경도(GPS)로 변환
 - **결과 CSV는 실행 시점의 년월일시간이 포함된 파일명으로 자동 저장**
-  - 예: `damaged_trees_gps_20250718_153012.csv`
+  - 예: `sample01_gps_20250718_153012.csv`
 
 ---
 
@@ -84,11 +81,11 @@ scripts/
 |-----------|------|
 | data/training_images/sample01.tif | 원본 GeoTIFF 이미지 |
 | data/training_images/sample01.tfw | 월드파일(좌표계) |
-| data/training_images/damaged_tree.csv | 피해목 중심 TM좌표(csv) |
+| data/training_images/sample01.csv | 피해목 중심 TM좌표(csv) |
 | data/tiles/images/ | 타일 이미지(자동 생성) |
 | data/tiles/labels/ | 타일별 YOLO 라벨(txt, 자동 생성) |
 | results/프로젝트명/weights/best.pt | 학습된 YOLO 모델 |
-| data/results/damaged_trees_gps_YYYYMMDD_HHMMSS.csv | 탐지 결과(GPS 좌표, 자동 생성) |
+| data/results/sample01_gps_YYYYMMDD_HHMMSS.csv | 탐지 결과(GPS 좌표, 자동 생성) |
 
 ---
 
@@ -139,7 +136,7 @@ yolo detect train data=data/data.yaml model=yolov8n.pt epochs=50 imgsz=640 proje
 ### 피해목 탐지 및 GPS 변환
 ```bash
 python3 scripts/yolo_infer_to_gps.py --weights results/프로젝트명/weights/best.pt --source data/tiles/images
-# 결과: data/results/damaged_trees_gps_YYYYMMDD_HHMMSS.csv
+# 결과: data/results/sample01_gps_YYYYMMDD_HHMMSS.csv
 ```
 
 ---

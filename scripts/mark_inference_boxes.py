@@ -2,12 +2,13 @@
 # 여러 타일 이미지에 추론 결과 박스 자동 마킹 스크립트 (OpenCV)
 # --------------------------------------
 # 사용법 예시:
-# poetry run python scripts/mark_inference_boxes.py --tiles_dir data/inference_images/inference_tiles --csv data/infer_results/damaged_trees_gps_20250725_171700.csv
+# poetry run python scripts/mark_inference_boxes.py --tiles_dir data/inference_images/inference_tiles --csv data/infer_results/sample01_gps_20250725_171700.csv
 # --tiles_dir: 타일 이미지 폴더 경로
 # --csv: 추론 결과 CSV 경로 (filename 컬럼 포함)
 # --------------------------------------
 
 import argparse
+import datetime
 import os
 
 import cv2
@@ -25,8 +26,11 @@ def main():
     parser.add_argument("--csv", type=str, required=True, help="추론 결과 CSV 경로")
     args = parser.parse_args()
 
-    # 마킹 이미지 저장 폴더
-    out_dir = os.path.join("data", "infer_results", "inference_tiles_marked")
+    # 마킹 이미지 저장 폴더 (날짜 기반)
+    today_date = datetime.datetime.now().strftime("%Y%m%d")
+    out_dir = os.path.join(
+        "data", "infer_results", "inference_tiles_marked", today_date
+    )
     os.makedirs(out_dir, exist_ok=True)
 
     # 추론 결과 CSV 불러오기
@@ -53,42 +57,8 @@ def main():
                     img = img[:, :, :3]
                 img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
                 # 박스 마킹
-                import pyproj
-
                 for _, row in df_img.iterrows():
-                    # 위경도 좌표를 픽셀 좌표로 변환
-                    if all(k in row for k in ["latitude", "longitude"]):
-                        lat, lon = float(row["latitude"]), float(row["longitude"])
-                        # 이미지 CRS가 EPSG:4326(위경도)이 아니면 변환 필요
-                        if src.crs and not src.crs.to_string().startswith("EPSG:4326"):
-                            proj = pyproj.Transformer.from_crs(
-                                "EPSG:4326", src.crs, always_xy=True
-                            )
-                            x_img, y_img = proj.transform(lon, lat)
-                            col, row_pix = src.index(x_img, y_img)
-                            print(
-                                f"[DEBUG] 변환(EPSG:4326→이미지CRS) 좌표: x_img={x_img}, y_img={y_img}, col={col}, row={row_pix}, 이미지 shape={img.shape}"
-                            )
-                        else:
-                            col, row_pix = src.index(lon, lat)
-                            print(
-                                f"[DEBUG] 변환(EPSG:4326) 좌표: col={col}, row={row_pix}, 이미지 shape={img.shape}"
-                            )
-                        w, h = 20, 20  # 박스 크기 (픽셀)
-                        xmin, ymin = col - w // 2, row_pix - h // 2
-                        xmax, ymax = col + w // 2, row_pix + h // 2
-                        # 박스가 이미지 영역 내에 있는지 체크
-                        if (
-                            xmin < 0
-                            or ymin < 0
-                            or xmax > img.shape[1]
-                            or ymax > img.shape[0]
-                        ):
-                            print(
-                                f"[WARNING] 박스가 이미지 영역 밖: {xmin},{ymin},{xmax},{ymax}"
-                            )
-                            continue
-                    elif all(k in row for k in ["xmin", "ymin", "xmax", "ymax"]):
+                    if all(k in row for k in ["xmin", "ymin", "xmax", "ymax"]):
                         xmin, ymin, xmax, ymax = (
                             int(row["xmin"]),
                             int(row["ymin"]),
@@ -104,9 +74,36 @@ def main():
                             x + w // 2,
                             y + h // 2,
                         )
+                    elif all(
+                        k in row for k in ["center_x", "center_y", "width", "height"]
+                    ):
+                        # YOLO 형식 좌표를 픽셀 좌표로 변환
+                        center_x, center_y = float(row["center_x"]), float(
+                            row["center_y"]
+                        )
+                        width, height = float(row["width"]), float(row["height"])
+                        image_width, image_height = img.shape[1], img.shape[0]
+
+                        xmin = int((center_x - width / 2) * image_width)
+                        ymin = int((center_y - height / 2) * image_height)
+                        xmax = int((center_x + width / 2) * image_width)
+                        ymax = int((center_y + height / 2) * image_height)
+
+                        # 박스가 이미지 영역 내에 있는지 체크
+                        if (
+                            xmin < 0
+                            or ymin < 0
+                            or xmax > image_width
+                            or ymax > image_height
+                        ):
+                            print(
+                                f"[WARNING] 박스가 이미지 영역 밖: {xmin},{ymin},{xmax},{ymax}"
+                            )
+                            continue
                     else:
                         print(f"[DEBUG] 좌표 정보 없음: {row}")
                         continue
+
                     color = (
                         (0, 0, 255)
                         if "class_id" in row and row["class_id"] == 0

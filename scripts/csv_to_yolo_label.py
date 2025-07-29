@@ -37,7 +37,7 @@ def make_yolo_label(
 
 if __name__ == "__main__":
     # 경로 및 파라미터
-    csv_path = "data/training_images/damaged_tree.csv"
+    csv_path = "data/training_images/sample01.csv"
     tfw_path = "data/training_images/sample01.tfw"
     out_txt = "data/train/labels/sample01.txt"
 
@@ -96,7 +96,7 @@ def make_yolo_label(
 
 if __name__ == "__main__":
     # 예시 경로 및 파라미터 (실제 경로/크기로 수정 필요)
-    csv_path = "data/training_images/damaged_tree.csv"
+    csv_path = "data/training_images/sample01.csv"
     tfw_path = "data/training_images/sample01.tfw"
     out_txt = "data/train/labels/sample01.txt"
     img_width = 18737

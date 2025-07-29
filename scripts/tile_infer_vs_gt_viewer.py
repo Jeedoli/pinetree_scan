@@ -41,7 +41,7 @@ import pandas as pd
 import pyproj
 
 # 추론 결과 CSV 경로
-csv_pred = "data/infer_results/damaged_trees_gps_20250728_190111.csv"
+csv_pred = "data/infer_results/sample01_gps_20250728_190111.csv"
 
 # 타일의 affine, CRS 정보
 with rasterio.open(tif_path) as src:
