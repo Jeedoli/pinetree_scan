@@ -80,7 +80,7 @@ def infer_and_save(weights, source, output):
         if img is not None and len(img.shape) == 3 and img.shape[2] == 4:
             img_rgb = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
             cv2.imwrite(img_path, img_rgb)
-        yolo_result = model(img_path, conf=0.5, max_det=1000)
+        yolo_result = model(img_path, conf=0.1, iou=0.3, max_det=1000)
         for r in yolo_result:
             for box in r.boxes:
                 class_id = int(box.cls[0])
