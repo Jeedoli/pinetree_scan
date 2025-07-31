@@ -165,8 +165,9 @@ python3 scripts/yolo_infer_to_gps.py --weights results/프로젝트명/weights/b
   ```
 - **결과 예시**:
   아래는 추론 결과를 시각화한 이미지 예시입니다.
+<img width="1024" height="1024" alt="sample01_8_7_marked" src="https://github.com/user-attachments/assets/1507422b-e1ad-4811-ab2f-41350473894d" />
 
-  ![Marked Inference Example](data/infer_results/inference_tiles_marked/example_marked.png)
+  
 
 ---
 
