@@ -2,7 +2,7 @@
 # 여러 타일 이미지에 추론 결과 박스 자동 마킹 스크립트 (OpenCV)
 # --------------------------------------
 # 사용법 예시:
-# poetry run python scripts/mark_inference_boxes.py --tiles_dir data/inference_images/inference_tiles --csv data/infer_results/sample01_gps_20250725_171700.csv
+# poetry run python scripts/mark_inference_boxes.py --tiles_dir data/tiles/images/0729 --csv data/infer_results/0730_tiles_inference_results.csv
 # --tiles_dir: 타일 이미지 폴더 경로
 # --csv: 추론 결과 CSV 경로 (filename 컬럼 포함)
 # --------------------------------------

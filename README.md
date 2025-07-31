@@ -141,6 +141,35 @@ python3 scripts/yolo_infer_to_gps.py --weights results/프로젝트명/weights/b
 
 ---
 
+## 📜 주요 스크립트 설명
+
+### 1. `tile_and_label.py`
+- **기능**: 대용량 GeoTIFF 이미지를 타일로 분할하고, TM 좌표를 YOLO 라벨로 변환
+- **사용법**:
+  ```bash
+  poetry run python scripts/tile_and_label.py --input data/large_image.tif --output data/tiles --tfw data/large_image.tfw
+  ```
+
+### 2. `yolo_infer_to_gps.py`
+- **기능**: YOLO 추론 결과를 CSV로 저장하며, YOLO 형식 좌표를 위경도(GPS)로 변환
+- **사용법**:
+  ```bash
+  poetry run python scripts/yolo_infer_to_gps.py --weights models/best.pt --source data/tiles/images --output data/infer_results/results.csv
+  ```
+
+### 3. `mark_inference_boxes.py`
+- **기능**: YOLO 추론 결과를 이미지에 시각화하여 저장
+- **사용법**:
+  ```bash
+  poetry run python scripts/mark_inference_boxes.py --tiles_dir data/tiles/images --csv data/infer_results/results.csv
+  ```
+- **결과 예시**:
+  아래는 추론 결과를 시각화한 이미지 예시입니다.
+
+  ![Marked Inference Example](data/infer_results/inference_tiles_marked/example_marked.png)
+
+---
+
 ## 💡 FAQ & 참고
 
 - **Q. 결과 CSV는 어떻게 생성되나요?**
