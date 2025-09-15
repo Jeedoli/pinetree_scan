@@ -109,9 +109,33 @@ async def create_tiles_and_labels(
             except Exception as e:
                 raise HTTPException(status_code=400, detail=f"CSV 파일 읽기 실패: {str(e)}")
             
+            # 날짜 기반 접두사 생성
+            today = datetime.datetime.now().strftime("%Y%m%d")
+            
+            # 같은 날짜의 기존 폴더들 확인하여 순차 접두사 결정
+            existing_prefixes = []
+            if os.path.exists(DEFAULT_OUTPUT_DIR):
+                for folder in os.listdir(DEFAULT_OUTPUT_DIR):
+                    if folder.startswith(f"tiles_") and today in folder:
+                        # tiles_A20250915_ 형태에서 접두사 추출
+                        parts = folder.split('_')
+                        if len(parts) >= 2 and parts[1].startswith(('A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J')):
+                            prefix_char = parts[1][0]
+                            existing_prefixes.append(prefix_char)
+            
+            # 다음 순차 접두사 결정 (A, B, C, ... Z 순서)
+            next_prefix = 'A'
+            for char in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ':
+                if char not in existing_prefixes:
+                    next_prefix = char
+                    break
+            
+            # 파일 접두사 생성
+            file_prefix = f"{next_prefix}{today}"
+            
             # 출력 디렉토리 생성
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_base = os.path.join(DEFAULT_OUTPUT_DIR, f"tiles_{timestamp}")
+            output_base = os.path.join(DEFAULT_OUTPUT_DIR, f"tiles_{file_prefix}_{timestamp}")
             output_images = os.path.join(output_base, "images")
             output_labels = os.path.join(output_base, "labels")
             
@@ -122,7 +146,7 @@ async def create_tiles_and_labels(
             tile_info = process_tiles_and_labels(
                 image_path, tfw_params, df, 
                 output_images, output_labels,
-                tile_size, bbox_size, class_id
+                tile_size, bbox_size, class_id, file_prefix
             )
             
             # ZIP 파일 생성
@@ -166,7 +190,7 @@ def tm_to_pixel(x: float, y: float, tfw: List[float]) -> tuple:
 def process_tiles_and_labels(
     image_path: str, tfw_params: List[float], df: pd.DataFrame,
     output_images: str, output_labels: str,
-    tile_size: int, bbox_size: int, class_id: int
+    tile_size: int, bbox_size: int, class_id: int, file_prefix: str
 ) -> List[TileInfo]:
     """타일 분할 및 라벨 생성 메인 로직"""
     
@@ -188,7 +212,7 @@ def process_tiles_and_labels(
                 
                 # RGB 3채널만 추출하여 타일 이미지 생성
                 tile_img = src.read([1, 2, 3], window=window)
-                tile_name = f"tile_{tx}_{ty}.tif"
+                tile_name = f"{file_prefix}_tile_{tx}_{ty}.tif"
                 
                 # 타일 내 라벨 생성
                 labels = []
