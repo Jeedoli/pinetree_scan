@@ -41,18 +41,78 @@ class InferenceResponse(BaseModel):
     detected_count: int
     results: List[DetectionResult]
     csv_file_url: Optional[str] = None
+    visualization_images: Optional[List[str]] = None  # 시각화 이미지 URL 리스트
 
 # 기본 설정
 DEFAULT_WEIGHTS = str(config.DEFAULT_MODEL_PATH)
 DEFAULT_OUTPUT_DIR = str(config.API_RESULTS_DIR)
 
+def draw_bounding_boxes_on_image(image, results, output_path: str):
+    """바운딩 박스를 이미지에 그리고 저장하는 함수 - 소나무 전용 최적화"""
+    for result in results:
+        boxes = result.boxes
+        if boxes is not None:
+            for box in boxes:
+                # 바운딩 박스 좌표 (x1, y1, x2, y2)
+                x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                confidence = box.conf[0].cpu().numpy()
+                class_id = int(box.cls[0].cpu().numpy())
+                
+                # 🌲 소나무 피해목 전용 바운딩 박스 크기 최적화
+                # 바운딩 박스를 15% 축소하여 더 정확한 영역만 표시
+                width = x2 - x1
+                height = y2 - y1
+                center_x = x1 + width / 2
+                center_y = y1 + height / 2
+                
+                # 크기 축소 비율 (85% 크기로 축소)
+                scale_factor = 0.85
+                new_width = width * scale_factor
+                new_height = height * scale_factor
+                
+                # 새로운 좌표 계산
+                new_x1 = int(center_x - new_width / 2)
+                new_y1 = int(center_y - new_height / 2)
+                new_x2 = int(center_x + new_width / 2)
+                new_y2 = int(center_y + new_height / 2)
+                
+                # 신뢰도에 따른 색상 조정 (낮은 신뢰도는 주황색으로)
+                if confidence >= 0.7:
+                    bbox_color = (0, 255, 0)  # 녹색 (높은 신뢰도)
+                elif confidence >= 0.4:
+                    bbox_color = (0, 165, 255)  # 주황색 (중간 신뢰도)
+                else:
+                    bbox_color = (0, 0, 255)  # 빨간색 (낮은 신뢰도)
+                
+                # 최적화된 바운딩 박스 그리기 (더 얇은 선)
+                cv2.rectangle(image, (new_x1, new_y1), (new_x2, new_y2), 
+                            bbox_color, 2)  # 두께를 2로 줄임
+                
+                # 더 작은 폰트로 레이블 표시
+                label = f"Pine Damage: {confidence:.2f}"
+                font_scale = 0.5  # 폰트 크기 축소
+                font_thickness = 1  # 폰트 두께 축소
+                label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 
+                                           font_scale, font_thickness)[0]
+                
+                # 텍스트 배경 그리기 (더 작게)
+                cv2.rectangle(image, (new_x1, new_y1 - label_size[1] - 5), 
+                            (new_x1 + label_size[0], new_y1), 
+                            bbox_color, -1)
+                
+                # 텍스트 그리기 (더 작게)
+                cv2.putText(image, label, (new_x1, new_y1 - 3), 
+                          cv2.FONT_HERSHEY_SIMPLEX, font_scale, 
+                          (255, 255, 255), font_thickness)
+
 @router.post("/detect", response_model=InferenceResponse)
 async def detect_damaged_trees(
     files: List[UploadFile] = File(..., description="탐지할 이미지 파일들 (TIFF, JPG, PNG)"),
     weights: str = Form(default=DEFAULT_WEIGHTS, description="YOLO 모델 가중치 경로"),
-    confidence: float = Form(default=0.05, description="신뢰도 임계값 (0.0~1.0)"),
-    iou_threshold: float = Form(default=0.25, description="IOU 임계값 (0.0~1.0)"),
-    save_csv: bool = Form(default=True, description="CSV 파일로 결과 저장 여부")
+    confidence: float = Form(default=0.3, description="신뢰도 임계값 (0.0~1.0) - 소나무 전용 최적화"),
+    iou_threshold: float = Form(default=0.6, description="IOU 임계값 (0.0~1.0) - 오탐지 방지"),
+    save_csv: bool = Form(default=True, description="CSV 파일로 결과 저장 여부"),
+    save_visualization: bool = Form(default=True, description="바운딩 박스가 그려진 시각화 이미지 저장 여부")
 ):
     """
     업로드된 이미지에서 소나무재선충병 피해목을 탐지합니다.
@@ -62,6 +122,7 @@ async def detect_damaged_trees(
     - **confidence**: 탐지 신뢰도 임계값 (기본: 0.05)
     - **iou_threshold**: IOU 임계값 (기본: 0.25)
     - **save_csv**: CSV 파일로 결과 저장 여부 (기본: True)
+    - **save_visualization**: 바운딩 박스가 그려진 시각화 이미지 저장 여부 (기본: True)
     """
     
     try:
@@ -75,6 +136,10 @@ async def detect_damaged_trees(
         # 결과 저장용 리스트
         all_results = []
         damaged_count = 0
+        visualization_urls = []  # 시각화 이미지 URL 저장용
+        
+        # 세션 타임스탬프 생성 (파일명 일관성을 위해)
+        session_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         
         # 임시 디렉토리 생성
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -130,6 +195,31 @@ async def detect_damaged_trees(
                             )
                             all_results.append(result)
                             damaged_count += 1
+                
+                # 시각화 이미지 생성 및 저장
+                if save_visualization:
+                    # 해당 파일의 탐지 결과만 필터링
+                    file_results = [r for r in all_results if r.filename == file.filename]
+                    
+                    if file_results:  # 탐지된 객체가 있는 경우에만 시각화
+                        # 바운딩 박스가 그려진 이미지 생성
+                        annotated_img = draw_detection_boxes(img, file_results, file.filename)
+                        
+                        # 시각화 디렉토리 생성
+                        vis_dir = str(config.API_VISUALIZATION_DIR)
+                        os.makedirs(vis_dir, exist_ok=True)
+                        
+                        # 시각화 이미지 파일명 생성 (세션 타임스탬프 사용)
+                        name_without_ext = os.path.splitext(file.filename)[0]
+                        vis_filename = f"{name_without_ext}_detected_{session_timestamp}.jpg"
+                        vis_path = os.path.join(vis_dir, vis_filename)
+                        
+                        # 시각화 이미지 저장
+                        cv2.imwrite(vis_path, annotated_img)
+                        
+                        # URL 생성
+                        vis_url = f"/api/v1/inference/visualization/{vis_filename}"
+                        visualization_urls.append(vis_url)
         
         # CSV 저장 처리
         csv_file_url = None
@@ -137,9 +227,8 @@ async def detect_damaged_trees(
             # 출력 디렉토리 생성
             os.makedirs(DEFAULT_OUTPUT_DIR, exist_ok=True)
             
-            # CSV 파일명 생성 (타임스탬프 포함)
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            csv_filename = f"detection_results_{timestamp}.csv"
+            # CSV 파일명 생성 (세션 타임스탬프 사용)
+            csv_filename = f"detection_results_{session_timestamp}.csv"
             csv_path = os.path.join(DEFAULT_OUTPUT_DIR, csv_filename)
             
             # DataFrame으로 변환 후 저장
@@ -152,7 +241,8 @@ async def detect_damaged_trees(
             message=f"탐지 완료: {damaged_count}개의 피해목을 발견했습니다.",
             detected_count=damaged_count,
             results=all_results,
-            csv_file_url=csv_file_url
+            csv_file_url=csv_file_url,
+            visualization_images=visualization_urls if visualization_urls else None
         )
         
     except Exception as e:
@@ -176,6 +266,23 @@ async def download_csv_result(filename: str):
         path=file_path,
         filename=filename,
         media_type='application/octet-stream'
+    )
+
+
+@router.get("/visualization/{filename}")
+async def download_visualization_image(filename: str):
+    """
+    탐지 결과 시각화 이미지를 다운로드합니다.
+    """
+    file_path = os.path.join(str(config.API_VISUALIZATION_DIR), filename)
+    
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="시각화 이미지를 찾을 수 없습니다.")
+    
+    return FileResponse(
+        path=file_path,
+        filename=filename,
+        media_type='image/jpeg'
     )
 
 

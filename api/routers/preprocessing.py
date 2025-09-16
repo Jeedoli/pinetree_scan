@@ -63,8 +63,8 @@ async def create_tiles_and_labels(
     - **image_file**: 원본 GeoTIFF 이미지 파일 (.tif/.tiff)
     - **tfw_file**: 좌표 변환 파일 (.tfw)
     - **csv_file**: 피해목 위치가 담긴 CSV 파일 (x, y 컬럼 필요)
-    - **tile_size**: 타일 한 변 크기 (기본: 1024픽셀)
-    - **bbox_size**: 바운딩박스 크기 (기본: 16픽셀)
+    - **tile_size**: 타일 한 변 크기 (기본: 1024픽셀, 디테일 보존)
+    - **bbox_size**: 바운딩박스 크기 (기본: 64픽셀, 4배 개선)
     - **class_id**: YOLO 클래스 ID (기본: 0)
     """
     

@@ -223,7 +223,7 @@ async def convert_csv_to_yolo_labels(
     tfw_file: UploadFile = File(..., description="좌표 변환 파일 (.tfw)"),
     image_width: int = Form(..., description="이미지 너비 (픽셀)"),
     image_height: int = Form(..., description="이미지 높이 (픽셀)"),
-    bbox_size: int = Form(default=16, description="바운딩박스 크기 (픽셀)"),
+    bbox_size: int = Form(default=64, description="바운딩박스 크기 (픽셀)"),
     class_id: int = Form(default=0, description="YOLO 클래스 ID")
 ):
     """
@@ -233,7 +233,7 @@ async def convert_csv_to_yolo_labels(
     - **csv_file**: TM 좌표가 담긴 CSV 파일 (x, y 컬럼 필요)
     - **tfw_file**: 좌표 변환을 위한 TFW 파일
     - **image_width/height**: 대상 이미지 크기
-    - **bbox_size**: 바운딩박스 크기 (기본: 16픽셀)
+    - **bbox_size**: 바운딩박스 크기 (기본: 64픽셀, 디테일 보존)
     - **class_id**: YOLO 클래스 ID (기본: 0)
     """
     
@@ -814,7 +814,7 @@ model = YOLO('yolov8s.pt')
 results = model.train(
     data='/content/dataset/data.yaml',
     epochs=200,
-    imgsz=1024,
+    imgsz=640,
     batch=16,
     device=0,
     cache=True
