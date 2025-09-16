@@ -25,9 +25,26 @@ DEFAULT_MODEL_PATH = MODELS_DIR / "colab_yolo" / "best.pt"
 DEFAULT_CONFIDENCE = 0.05
 DEFAULT_IOU_THRESHOLD = 0.25
 
-# 전처리 기본 설정
-DEFAULT_TILE_SIZE = 1024
-DEFAULT_BBOX_SIZE = 16
+# 전처리 기본 설정 (디테일 보존을 위한 1024 복원)
+DEFAULT_TILE_SIZE = 1024  # 2048 → 1024 (세밀한 탐지)
+DEFAULT_BBOX_SIZE = 64    # 80 → 64 (적절한 크기)
+
+# 🌲 소나무 전용 시각화 설정
+VISUALIZATION_BBOX_COLOR = (0, 255, 0)          # 기본 녹색
+VISUALIZATION_BBOX_THICKNESS = 2                # 얇은 선 두께
+VISUALIZATION_FONT_SCALE = 0.5                  # 작은 폰트 크기
+VISUALIZATION_FONT_THICKNESS = 1                # 얇은 폰트
+VISUALIZATION_TEXT_COLOR = (255, 255, 255)      # 흰색 텍스트
+
+# 🎯 소나무 전용 탐지 임계값
+DEFAULT_CONFIDENCE_THRESHOLD = 0.3              # 더 높은 신뢰도 (오탐지 방지)
+DEFAULT_IOU_THRESHOLD = 0.6                     # 더 높은 IoU (정확한 위치)
+PINE_DETECTION_MIN_CONFIDENCE = 0.25            # 최소 신뢰도
+PINE_DETECTION_MAX_DETECTIONS = 100             # 최대 탐지 수
+
+# 🌲 바운딩 박스 크기 조정
+BBOX_SCALE_FACTOR = 0.85                        # 15% 축소
+BBOX_MIN_SIZE = 20                              # 최소 바운딩 박스 크기
 DEFAULT_CLASS_ID = 0
 
 # 시각화 기본 설정
