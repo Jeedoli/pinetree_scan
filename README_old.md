@@ -58,8 +58,9 @@ pinetree_scan/
 
 ---
 
+## 🎯 빠른 시작
 
-## 🔥 Google Colab으로 학습
+### 🔥 Google Colab으로 학습하기 (권장)
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Jeedoli/pinetree_scan/blob/main/notebooks/YOLOv11s_Smart_Training.ipynb)
 
@@ -272,3 +273,13 @@ training_data/
 - [rasterio 공식 문서](https://rasterio.readthedocs.io/)
 
 ---
+
+## 📞 지원 및 기여
+
+- **Issues**: [GitHub Issues](https://github.com/Jeedoli/pinetree_scan/issues)
+- **License**: MIT License
+- **기여**: Pull Request 환영
+
+---
+
+> **🌲 지속 가능한 산림 관리를 위한 AI 기술로 더 나은 미래를 만들어가세요!**
