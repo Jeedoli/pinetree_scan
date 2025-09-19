@@ -15,7 +15,8 @@ from datetime import datetime
 from . import config
 
 # 라우터 import
-from .routers import inference, preprocessing, visualization, utilities
+from .routers import inference, preprocessing, visualization
+# from .routers import utilities  # 임시 주석 처리
 
 # FastAPI 앱 생성
 app = FastAPI(
@@ -42,7 +43,7 @@ app.add_middleware(
 app.include_router(inference.router, prefix="/api/v1/inference", tags=["추론/탐지"])
 app.include_router(preprocessing.router, prefix="/api/v1/preprocessing", tags=["전처리"])
 app.include_router(visualization.router, prefix="/api/v1/visualization", tags=["시각화"])
-app.include_router(utilities.router, prefix="/api/v1/utilities", tags=["유틸리티"])
+# app.include_router(utilities.router, prefix="/api/v1/utilities", tags=["유틸리티"])
 
 # 서버 시작 시 필요한 디렉토리 생성
 @app.on_event("startup")
@@ -69,10 +70,27 @@ async def root():
         "max_file_size": f"{config.MAX_FILE_SIZE / (1024**3):.1f}GB",
         "endpoints": {
             "inference": "/api/v1/inference",
-            "preprocessing": "/api/v1/preprocessing", 
-            "visualization": "/api/v1/visualization",
-            "utilities": "/api/v1/utilities"
-        }
+            "preprocessing": "/api/v1/preprocessing",
+            "visualization": "/api/v1/visualization"
+            # "utilities": "/api/v1/utilities"  # 임시 비활성화
+        },
+        "recommended_apis": {
+            "🚀 통합 딥러닝 데이터셋 생성": "/api/v1/preprocessing/create_complete_training_dataset",
+            "🔍 이미지 추론": "/api/v1/inference/predict",
+            "📊 배치 추론": "/api/v1/inference/batch_predict", 
+            "🎨 결과 시각화": "/api/v1/visualization/create_visualization"
+        },
+        "legacy_apis": {
+            "⚠️ 타일링만 (레거시)": "/api/v1/preprocessing/tile_and_label"
+        },
+        "features": [
+            "🎯 24px 바운딩박스 최적화 (개별 나무 탐지)",
+            "🚀 Google Colab 최적화 딥러닝 데이터셋",
+            "📦 자동 train/validation 분할",
+            "🗺️ TM좌표계 ↔ 픽셀좌표 변환",
+            "📊 실시간 처리 진행률 표시",
+            "🎨 결과 시각화 및 ZIP 다운로드"
+        ]
     }
 
 # 헬스체크 엔드포인트
@@ -83,6 +101,23 @@ async def health_check():
         "timestamp": datetime.now().isoformat(),
         "service": "pinetree-damage-api"
     }
+
+# 로그 테스트 엔드포인트 (실시간 로그 확인용)
+@app.get("/test_logs")
+async def test_logs():
+    """실시간 로그 테스트를 위한 엔드포인트"""
+    import time
+    
+    print("🔄 로그 테스트 시작", flush=True)
+    
+    for i in range(10):
+        time.sleep(0.5)  # 0.5초 대기
+        message = f"📊 테스트 진행률: {(i+1)*10}% ({i+1}/10)"
+        print(message, flush=True)
+    
+    print("✅ 로그 테스트 완료", flush=True)
+    
+    return {"message": "로그 테스트 완료", "status": "success"}
 
 if __name__ == "__main__":
     uvicorn.run(
