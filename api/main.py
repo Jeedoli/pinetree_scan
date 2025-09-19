@@ -16,7 +16,6 @@ from . import config
 
 # 라우터 import
 from .routers import inference, preprocessing, visualization
-# from .routers import utilities  # 임시 주석 처리
 
 # FastAPI 앱 생성
 app = FastAPI(
@@ -43,7 +42,6 @@ app.add_middleware(
 app.include_router(inference.router, prefix="/api/v1/inference", tags=["추론/탐지"])
 app.include_router(preprocessing.router, prefix="/api/v1/preprocessing", tags=["전처리"])
 app.include_router(visualization.router, prefix="/api/v1/visualization", tags=["시각화"])
-# app.include_router(utilities.router, prefix="/api/v1/utilities", tags=["유틸리티"])
 
 # 서버 시작 시 필요한 디렉토리 생성
 @app.on_event("startup")
@@ -72,7 +70,6 @@ async def root():
             "inference": "/api/v1/inference",
             "preprocessing": "/api/v1/preprocessing",
             "visualization": "/api/v1/visualization"
-            # "utilities": "/api/v1/utilities"  # 임시 비활성화
         },
         "recommended_apis": {
             "🚀 통합 딥러닝 데이터셋 생성": "/api/v1/preprocessing/create_complete_training_dataset",
