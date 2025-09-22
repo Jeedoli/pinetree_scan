@@ -27,7 +27,7 @@ DEFAULT_IOU_THRESHOLD = 0.25
 
 # 전처리 기본 설정 (디테일 보존을 위한 1024 복원)
 DEFAULT_TILE_SIZE = 1024  # 2048 → 1024 (세밀한 탐지)
-DEFAULT_BBOX_SIZE = 24    # 64 → 24 (개별 피해목 정확 탐지)
+DEFAULT_BBOX_SIZE = 32    # 24 → 32 (중간 크기 피해목 최적화)
 
 # 🌲 소나무 전용 시각화 설정
 VISUALIZATION_BBOX_COLOR = (0, 255, 0)          # 기본 녹색
