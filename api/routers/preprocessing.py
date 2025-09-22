@@ -69,15 +69,6 @@ class InferenceTileInfo(BaseModel):
     position: tuple  # (tx, ty)
     has_georeference: bool
 
-class PreprocessingResponse(BaseModel):
-    success: bool
-    message: str
-    total_tiles: int
-    tiles_with_labels: int
-    total_labels: int
-    tile_info: List[TileInfo]
-    download_url: Optional[str] = None
-
 class IntegratedTrainingResponse(BaseModel):
     success: bool
     message: str
@@ -101,284 +92,94 @@ DEFAULT_BBOX_SIZE = config.DEFAULT_BBOX_SIZE
 DEFAULT_CLASS_ID = config.DEFAULT_CLASS_ID
 DEFAULT_OUTPUT_DIR = Path(config.API_TILES_DIR)  # Path 객체로 변경
 
-@router.post("/tile_and_label", response_model=PreprocessingResponse)
-async def create_tiles_and_labels(
-    image_file: UploadFile = File(..., description="원본 GeoTIFF 이미지"),
-    tfw_file: UploadFile = File(..., description="좌표 변환 파일 (.tfw)"),
-    csv_file: UploadFile = File(..., description="피해목 위치 CSV 파일"),
-    tile_size: int = Form(default=DEFAULT_TILE_SIZE, description="타일 크기 (픽셀)"),
-    bbox_size: int = Form(default=DEFAULT_BBOX_SIZE, description="바운딩박스 크기 (픽셀)"),
-    class_id: int = Form(default=DEFAULT_CLASS_ID, description="YOLO 클래스 ID")
-):
-    """
-    ⚠️ **레거시 API**: 이 API는 하위 호환성을 위해 유지됩니다.
-    **새로운 프로젝트는 `/create_complete_training_dataset` API 사용을 권장합니다.**
-    
-    대용량 GeoTIFF 이미지를 타일로 분할하고 YOLO 라벨을 자동 생성합니다.
-    (딥러닝용 ZIP 파일 생성은 별도로 처리해야 함)
-    
-    **📋 매개변수:**
-    - **image_file**: 원본 GeoTIFF 이미지 파일 (.tif/.tiff)
-    - **tfw_file**: 좌표 변환 파일 (.tfw)
-    - **csv_file**: 피해목 위치가 담긴 CSV 파일 (x, y 컬럼 필요)
-    - **tile_size**: 타일 한 변 크기 (기본: 1024픽셀, 세밀한 탐지 최적화)
-    - **bbox_size**: 바운딩박스 크기 (기본: 24픽셀, 개별 나무 탐지용)
-    - **class_id**: YOLO 클래스 ID (기본: 0)
-    
-    **🚀 권장 사용법:**
-    통합 API `/create_complete_training_dataset`를 사용하면:
-    - 타일링 + YOLO 라벨 생성 + 딥러닝용 ZIP 생성을 한 번에 처리
-    - Google Colab 최적화된 데이터셋 구조
-    - 자동 train/validation 분할
-    - README 및 사용법 가이드 포함
-    """
-    
-    try:
-        # 파일 확장자 검증
-        if not image_file.filename.lower().endswith(('.tif', '.tiff')):
-            raise HTTPException(status_code=400, detail="이미지 파일은 TIFF 형식이어야 합니다.")
-        
-        if not tfw_file.filename.lower().endswith('.tfw'):
-            raise HTTPException(status_code=400, detail="좌표 변환 파일은 .tfw 형식이어야 합니다.")
-        
-        if not csv_file.filename.lower().endswith('.csv'):
-            raise HTTPException(status_code=400, detail="피해목 위치 파일은 CSV 형식이어야 합니다.")
-        
-        # 임시 디렉토리 생성
-        with tempfile.TemporaryDirectory() as temp_dir:
-            
-            # 업로드 파일들을 임시 디렉토리에 저장
-            image_path = os.path.join(temp_dir, image_file.filename)
-            tfw_path = os.path.join(temp_dir, tfw_file.filename)
-            csv_path = os.path.join(temp_dir, csv_file.filename)
-            
-            # 파일 저장
-            with open(image_path, "wb") as f:
-                shutil.copyfileobj(image_file.file, f)
-            with open(tfw_path, "wb") as f:
-                shutil.copyfileobj(tfw_file.file, f)
-            with open(csv_path, "wb") as f:
-                shutil.copyfileobj(csv_file.file, f)
-            
-            # TFW 파일 로드
-            tfw_params = load_tfw(tfw_path)
-            
-            # CSV 파일 로드 및 검증
-            try:
-                df = pd.read_csv(csv_path)
-                if 'x' not in df.columns or 'y' not in df.columns:
-                    raise HTTPException(
-                        status_code=400, 
-                        detail="CSV 파일에 'x', 'y' 컬럼이 필요합니다."
-                    )
-            except Exception as e:
-                raise HTTPException(status_code=400, detail=f"CSV 파일 읽기 실패: {str(e)}")
-            
-            # 날짜 기반 접두사 생성
-            today = datetime.datetime.now().strftime("%Y%m%d")
-            
-            # 같은 날짜의 기존 폴더들 확인하여 순차 접두사 결정
-            existing_prefixes = []
-            if os.path.exists(DEFAULT_OUTPUT_DIR):
-                for folder in os.listdir(DEFAULT_OUTPUT_DIR):
-                    if folder.startswith(f"tiles_") and today in folder:
-                        # tiles_A20250915_ 형태에서 접두사 추출
-                        parts = folder.split('_')
-                        if len(parts) >= 2 and parts[1].startswith(('A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J')):
-                            prefix_char = parts[1][0]
-                            existing_prefixes.append(prefix_char)
-            
-            # 다음 순차 접두사 결정 (A, B, C, ... Z 순서)
-            next_prefix = 'A'
-            for char in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ':
-                if char not in existing_prefixes:
-                    next_prefix = char
-                    break
-            
-            # 파일 접두사 생성
-            file_prefix = f"{next_prefix}{today}"
-            
-            # 출력 디렉토리 생성
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_base = DEFAULT_OUTPUT_DIR / f"tiles_{file_prefix}_{timestamp}"
-            output_images = output_base / "images"
-            output_labels = output_base / "labels"
-            
-            output_images.mkdir(parents=True, exist_ok=True)
-            output_labels.mkdir(parents=True, exist_ok=True)
-            
-            # 타일 분할 및 라벨 생성 실행
-            tile_info = process_tiles_and_labels(
-                image_path, tfw_params, df, 
-                str(output_images), str(output_labels),
-                tile_size, bbox_size, class_id, file_prefix
-            )
-            
-            # ZIP 파일 생성
-            zip_path = create_tiles_zip(output_base, timestamp)
-            
-            # 통계 계산
-            total_tiles = len(tile_info)
-            tiles_with_labels = len([t for t in tile_info if t.labels_count > 0])
-            total_labels = sum(t.labels_count for t in tile_info)
-            
-            return PreprocessingResponse(
-                success=True,
-                message=f"타일 분할 완료: {total_tiles}개 타일 생성, {total_labels}개 라벨 생성",
-                total_tiles=total_tiles,
-                tiles_with_labels=tiles_with_labels,
-                total_labels=total_labels,
-                tile_info=tile_info,
-                download_url=f"/api/v1/preprocessing/download/{os.path.basename(zip_path)}"
-            )
-            
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"전처리 중 오류 발생: {str(e)}")
-
-
-def load_tfw(tfw_path: str) -> List[float]:
+# 헬퍼 함수들
+def load_tfw(tfw_path):
     """TFW 파일에서 변환 파라미터 읽기"""
-    with open(tfw_path, 'r') as f:
-        return [float(line.strip()) for line in f.readlines()]
+    with open(tfw_path) as f:
+        vals = [float(x.strip()) for x in f.readlines()]
+    return vals
 
-
-def tm_to_pixel(x: float, y: float, tfw: List[float]) -> tuple:
-    """TM 좌표를 이미지 픽셀 좌표로 변환"""
+def tm_to_pixel(x, y, tfw):
+    """TM 좌표(x, y)를 이미지 픽셀 좌표(px, py)로 변환"""
     A, D, B, E, C, F = tfw
     px = (x - C) / A
     py = (y - F) / E
     return px, py
 
-
-def process_tiles_and_labels(
-    image_path: str, tfw_params: List[float], df: pd.DataFrame,
-    output_images: str, output_labels: str,
-    tile_size: int, bbox_size: int, class_id: int, file_prefix: str
-) -> List[TileInfo]:
-    """타일 분할 및 라벨 생성 메인 로직"""
-    
+def process_tiles_and_labels(image_path, tfw_params, df, output_images, output_labels, 
+                           tile_size, bbox_size, class_id, file_prefix):
+    """이미지 타일 분할 및 각 타일별 YOLO 라벨 생성"""
     tile_info = []
     
     with rasterio.open(image_path) as src:
         width, height = src.width, src.height
         n_tiles_x = int(np.ceil(width / tile_size))
         n_tiles_y = int(np.ceil(height / tile_size))
-        total_tiles = n_tiles_x * n_tiles_y
-        
-        print(f"🎯 이미지 크기: {width}x{height} 픽셀", flush=True)
-        print(f"📊 생성할 타일: {n_tiles_x}x{n_tiles_y} = {total_tiles}개", flush=True)
-        print(f"🔄 타일링 시작...", flush=True)
-        
-        processed_tiles = 0
-        tiles_with_labels = 0
         
         for ty in range(n_tiles_y):
             for tx in range(n_tiles_x):
-                processed_tiles += 1
-                
-                # 진행률 출력 (10% 단위 또는 100타일마다)
-                if processed_tiles % max(1, total_tiles // 10) == 0 or processed_tiles % 100 == 0:
-                    progress = (processed_tiles / total_tiles) * 100
-                    print(f"📈 진행률: {progress:.1f}% ({processed_tiles}/{total_tiles})", flush=True)
-                
                 x0 = tx * tile_size
                 y0 = ty * tile_size
                 w = min(tile_size, width - x0)
                 h = min(tile_size, height - y0)
-                
                 window = Window(x0, y0, w, h)
                 
                 # RGB 3채널만 추출하여 타일 이미지 생성
                 tile_img = src.read([1, 2, 3], window=window)
-                tile_name = f"{file_prefix}_tile_{tx}_{ty}.tif"
+                tile_name = f"{file_prefix}_{tx}_{ty}.tif"
                 
-                # 타일 내 라벨 생성
-                labels = []
+                # 타일 내 bbox 라벨 생성
+                lines = []
                 for _, row in df.iterrows():
-                    px, py = tm_to_pixel(row['x'], row['y'], tfw_params)
-                    
+                    px, py = tm_to_pixel(row["x"], row["y"], tfw_params)
                     # 타일 내 상대좌표로 변환
                     rel_x = px - x0
                     rel_y = py - y0
-                    
                     if 0 <= rel_x < w and 0 <= rel_y < h:
-                        # YOLO 형식으로 정규화
                         x_center = rel_x / w
                         y_center = rel_y / h
                         bw = bbox_size / w
                         bh = bbox_size / h
-                        
-                        labels.append(f"{class_id} {x_center:.6f} {y_center:.6f} {bw:.6f} {bh:.6f}")
+                        lines.append(
+                            f"{class_id} {x_center:.6f} {y_center:.6f} {bw:.6f} {bh:.6f}"
+                        )
                 
                 # 라벨이 있는 경우에만 저장
-                if labels:
-                    tiles_with_labels += 1
-                    
+                labels_count = len(lines)
+                saved = labels_count > 0
+                
+                if saved:
                     # 라벨 파일 저장
-                    label_path = os.path.join(output_labels, tile_name.replace(".tif", ".txt"))
-                    with open(label_path, 'w') as f:
-                        f.write('\n'.join(labels))
-                    
-                    # 라벨이 있는 타일 로그 (처음 몇 개만)
-                    if tiles_with_labels <= 5:
-                        print(f"🏷️ 라벨 타일 생성: {tile_name} ({len(labels)}개 라벨)", flush=True)
-                    elif tiles_with_labels % 50 == 0:  # 50개마다 로그
-                        print(f"🏷️ 라벨 타일 누적: {tiles_with_labels}개", flush=True)
+                    out_lbl_path = os.path.join(output_labels, tile_name.replace(".tif", ".txt"))
+                    with open(out_lbl_path, "w") as f:
+                        f.write("\n".join(lines))
                     
                     # 타일 이미지 저장
-                    tile_path = os.path.join(output_images, tile_name)
+                    out_img_path = os.path.join(output_images, tile_name)
                     orig_affine = src.transform
                     tile_affine = orig_affine * Affine.translation(x0, y0)
-                    
                     with rasterio.open(
-                        tile_path, 'w',
-                        driver='GTiff',
-                        height=h, width=w, count=3,
+                        out_img_path,
+                        "w",
+                        driver="GTiff",
+                        height=h,
+                        width=w,
+                        count=3,
                         dtype=src.dtypes[0],
                         crs=src.crs,
-                        transform=tile_affine
+                        transform=tile_affine,
                     ) as dst:
                         dst.write(tile_img)
                 
-                # 타일 정보 추가 (라벨 유무 관계없이)
+                # 타일 정보 저장 (TileInfo 모델에 맞게 조정)
                 tile_info.append(TileInfo(
                     tile_name=tile_name,
-                    labels_count=len(labels),
+                    labels_count=labels_count,
                     tile_size=(w, h),
                     position=(tx, ty)
                 ))
     
     return tile_info
-
-
-def create_tiles_zip(output_base: Path, timestamp: str) -> str:
-    """생성된 타일과 라벨을 ZIP 파일로 압축"""
-    zip_filename = f"tiles_and_labels_{timestamp}.zip"
-    zip_path = DEFAULT_OUTPUT_DIR / zip_filename
-    
-    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-        # images 폴더 압축
-        images_dir = output_base / "images"
-        if images_dir.exists():
-            for root, dirs, files in os.walk(images_dir):
-                for file in files:
-                    file_path = os.path.join(root, file)
-                    arcname = os.path.relpath(file_path, output_base)
-                    zipf.write(file_path, arcname)
-        
-        # labels 폴더 압축
-        labels_dir = output_base / "labels"
-        if labels_dir.exists():
-            for root, dirs, files in os.walk(labels_dir):
-                for file in files:
-                    file_path = os.path.join(root, file)
-                    arcname = os.path.relpath(file_path, output_base)
-                    zipf.write(file_path, arcname)
-    
-    return str(zip_path)
-
 
 @router.get("/download/{filename}")
 async def download_tiles_zip(filename: str):
@@ -591,8 +392,8 @@ def create_inference_tiles_zip(output_base: Path, timestamp: str) -> str:
     return str(zip_path)
 
 
-@router.post("/create_complete_training_dataset", response_model=IntegratedTrainingResponse)
-async def create_complete_training_dataset(
+@router.post("/create-dataset", response_model=IntegratedTrainingResponse)
+async def create_dataset(
     image_file: UploadFile = File(..., description="처리할 GeoTIFF 이미지 파일"),
     csv_file: UploadFile = File(..., description="GPS 좌표 CSV 파일 (x, y 또는 longitude, latitude 컬럼)"),
     tfw_file: UploadFile = File(..., description="지리참조를 위한 TFW 파일"),
@@ -610,10 +411,20 @@ async def create_complete_training_dataset(
     🚀 **통합 딥러닝 데이터셋 생성 API** (권장)
     
     **이 API는 다음 작업을 한번에 수행합니다:**
-    1. 🖼️ GeoTIFF 이미지를 타일로 분할
+    1. 🖼️ GeoTIFF 이미지를 타일로 분할 (모든 영역 포함)
     2. 🏷️ GPS 좌표 기반 YOLO 라벨 자동 생성  
-    3. 📦 Google Colab 최적화 딥러닝용 ZIP 파일 생성
-    4. 📊 Train/Validation 데이터셋 자동 분할
+    3. � Positive/Negative 샘플 균형 데이터셋 생성
+    4. �📦 Google Colab 최적화 딥러닝용 ZIP 파일 생성
+    5. 📊 Train/Validation 데이터셋 자동 분할
+    6. 📋 README 및 사용법 가이드 포함
+    
+    **🎯 개선된 데이터셋 특징:**
+    - ✅ **균형 잡힌 데이터**: 피해목이 있는 영역 + 건강한 산림 영역
+    - ✅ **Negative 샘플 포함**: 오탐지 방지를 위한 음성 샘플 자동 생성
+    - ✅ **클래스 불균형 해결**: 양성/음성 샘플 비율 정보 제공
+    - ✅ **YOLO 완벽 호환**: 빈 라벨 파일로 negative 샘플 처리
+    
+    **📋 매개변수:**
     5. 📋 README 및 사용법 가이드 포함
     
     **📋 매개변수:**
@@ -622,7 +433,7 @@ async def create_complete_training_dataset(
     - **tfw_file**: 지리참조를 위한 TFW 파일 (.tfw)
     - **file_prefix**: 생성될 타일 파일명 접두사 (예: "A20250919")
     - **tile_size**: 타일 크기 (기본: 1024px, 세밀한 탐지 최적화)
-    - **bbox_size**: 바운딩 박스 크기 (기본: 24px, 개별 나무 탐지 최적화)
+    - **bbox_size**: 바운딩 박스 크기 (기본: 32px, 중간 크기 피해목 탐지 최적화)
     - **class_id**: YOLO 클래스 ID (기본: 0)
     - **train_split**: 학습 데이터 비율 (기본: 0.8 = 80% 학습, 20% 검증)
     - **class_names**: 클래스 이름 (쉼표로 구분, 기본: "damaged_tree")
@@ -643,10 +454,6 @@ async def create_complete_training_dataset(
     model = YOLO('yolo11s.pt')
     results = model.train(data='/content/dataset/data.yaml', epochs=200)
     ```
-    
-    **⚠️ 기존 API와의 차이점:**
-    - `/tile_and_label`: 타일링과 라벨링만 수행 (레거시)
-    - `/create_complete_training_dataset`: 전체 워크플로우를 한번에 수행 (권장)
     
     **📋 추가 매개변수:**
     - **class_names**: 클래스 이름 (쉼표로 구분, 기본: "damaged_tree")
@@ -760,23 +567,43 @@ async def create_complete_training_dataset(
             # Step 2: 딥러닝용 데이터셋 생성
             print("🔄 Step 2: 딥러닝용 데이터셋 생성 시작...", flush=True)
             
-            # 타일 이미지와 라벨 파일 매칭
+            # 타일 이미지와 라벨 파일 매칭 (모든 이미지 포함)
             image_files = list(tiles_images_dir.glob("*.tif"))
             label_files = list(tiles_labels_dir.glob("*.txt"))
             
-            # 매칭되는 파일들만 선택
+            # 모든 이미지에 대해 라벨 파일 매칭 (없으면 빈 라벨로 처리)
             matched_files = []
+            positive_samples = 0  # 라벨이 있는 샘플 수
+            negative_samples = 0  # 라벨이 없는 샘플 수
+            
             for img_file in image_files:
                 label_file = tiles_labels_dir / f"{img_file.stem}.txt"
-                if label_file.exists():
-                    matched_files.append((img_file, label_file))
+                
+                # 라벨 파일이 없으면 빈 라벨 파일 생성
+                if not label_file.exists():
+                    with open(label_file, 'w') as f:
+                        pass  # 빈 파일 생성
+                    negative_samples += 1
+                else:
+                    # 라벨 파일이 있는 경우 내용 확인
+                    with open(label_file, 'r') as f:
+                        content = f.read().strip()
+                    if content:
+                        positive_samples += 1
+                    else:
+                        negative_samples += 1
+                
+                matched_files.append((img_file, label_file))
             
-            print(f"📊 매칭된 파일 쌍: {len(matched_files)}개", flush=True)
+            print(f"📊 전체 데이터셋: {len(matched_files)}개")
+            print(f"📊 양성 샘플 (피해목 있음): {positive_samples}개")
+            print(f"📊 음성 샘플 (피해목 없음): {negative_samples}개")
+            print(f"📊 클래스 비율: Positive={positive_samples/(positive_samples+negative_samples)*100:.1f}%, Negative={negative_samples/(positive_samples+negative_samples)*100:.1f}%")
             
             if len(matched_files) == 0:
                 raise HTTPException(
                     status_code=400, 
-                    detail="매칭되는 이미지-라벨 파일 쌍을 찾을 수 없습니다."
+                    detail="타일 이미지를 찾을 수 없습니다."
                 )
             
             # 데이터 셔플
