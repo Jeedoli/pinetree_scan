@@ -41,14 +41,6 @@ class DetectionResult(BaseModel):
     tm_x: Optional[float] = None  # TM 좌표 X
     tm_y: Optional[float] = None  # TM 좌표 Y
 
-class InferenceResponse(BaseModel):
-    success: bool
-    message: str
-    detected_count: int
-    results: List[DetectionResult]
-    csv_file_url: Optional[str] = None
-    visualization_images: Optional[List[str]] = None  # 시각화 이미지 URL 리스트
-
 class BatchInferenceResponse(BaseModel):
     success: bool
     message: str
@@ -63,15 +55,47 @@ class BatchInferenceResponse(BaseModel):
 def extract_tile_position(filename: str) -> tuple:
     """타일 파일명에서 위치 정보 추출 (prefix_tile_x_y.tif -> (x, y))"""
     try:
-        # A20250917_tile_2_1.tif -> ['A20250917', 'tile', '2', '1', 'tif']
-        parts = filename.replace('.tif', '').replace('.tiff', '').split('_')
-        if len(parts) >= 4 and parts[-3] == 'tile':
-            x = int(parts[-2])
-            y = int(parts[-1])
+        # 다양한 파일명 형식 지원
+        name_without_ext = filename.replace('.tif', '').replace('.tiff', '').replace('.jpg', '').replace('.jpeg', '').replace('.png', '')
+        
+        # 형식 1: A20250917_tile_2_1 -> ['A20250917', 'tile', '2', '1']
+        parts = name_without_ext.split('_')
+        
+        # tile이 포함된 경우
+        if 'tile' in parts:
+            tile_idx = parts.index('tile')
+            if len(parts) > tile_idx + 2:
+                x = int(parts[tile_idx + 1])
+                y = int(parts[tile_idx + 2])
+                return (x, y)
+        
+        # 형식 2: prefix_x_y (마지막 두 개가 숫자인 경우)
+        if len(parts) >= 3:
+            try:
+                x = int(parts[-2])
+                y = int(parts[-1])
+                return (x, y)
+            except ValueError:
+                pass
+        
+        # 형식 3: 정규식으로 숫자 패턴 찾기
+        import re
+        pattern = r'(\d+)_(\d+)(?:\.|$)'
+        match = re.search(pattern, filename)
+        if match:
+            x = int(match.group(1))
+            y = int(match.group(2))
             return (x, y)
-    except (ValueError, IndexError):
+            
+    except (ValueError, IndexError, AttributeError):
         pass
-    return (0, 0)
+    
+    # 파싱 실패시 파일명에 _0_0이 있는지 확인
+    if '_0_0' in filename:
+        return (0, 0)
+    
+    print(f"⚠️ 타일 위치 추출 실패: {filename}")
+    return (0, 0)  # 기본값
 
 
 def create_merged_visualization(all_results: List[DetectionResult], output_base: str, 
@@ -84,95 +108,99 @@ def create_merged_visualization(all_results: List[DetectionResult], output_base:
     try:
         print("🖼️ 합쳐진 시각화 이미지 생성 시작...")
         
-        # 타일 위치 정보 수집
+        # 모든 타일 파일 먼저 수집 (탐지 결과 유무와 관계없이)
+        all_tile_files = {}
         tile_positions = {}
-        tile_files = {}  # 타일 파일 경로 저장
         
+        # extract_dir에서 모든 타일 파일 찾기
+        for root, dirs, files in os.walk(extract_dir):
+            for file in files:
+                if file.lower().endswith(('.tif', '.tiff', '.jpg', '.jpeg', '.png')):
+                    x, y = extract_tile_position(file)
+                    if (x, y) != (0, 0) or '_0_0' in file:  # (0,0)은 실제 좌표이거나 파싱 실패
+                        tile_path = os.path.join(root, file)
+                        all_tile_files[(x, y)] = tile_path
+                        
+                        # 탐지 결과가 있는 타일 체크
+                        if (x, y) not in tile_positions:
+                            tile_positions[(x, y)] = []
+        
+        # 탐지 결과를 해당 타일 위치에 할당
         for result in all_results:
             x, y = extract_tile_position(result.filename)
-            if (x, y) not in tile_positions:
-                tile_positions[(x, y)] = []
-                # 타일 파일 경로 찾기
-                tile_path = None
-                for root, dirs, files in os.walk(extract_dir):
-                    if result.filename in files:
-                        tile_path = os.path.join(root, result.filename)
-                        break
-                tile_files[(x, y)] = tile_path
-            tile_positions[(x, y)].append(result)
+            if (x, y) in tile_positions:
+                tile_positions[(x, y)].append(result)
         
-        if not tile_positions:
+        if not all_tile_files:
+            print("⚠️ 타일 파일을 찾을 수 없습니다.")
             return None
         
+        # 실제 존재하는 타일들로부터 격자 범위 계산
+        existing_positions = list(all_tile_files.keys())
+        min_x = min(pos[0] for pos in existing_positions)
+        max_x = max(pos[0] for pos in existing_positions)
+        min_y = min(pos[1] for pos in existing_positions)
+        max_y = max(pos[1] for pos in existing_positions)
+        
+        print(f"📊 타일 격자 범위: X({min_x}~{max_x}), Y({min_y}~{max_y})")
+        print(f"📊 전체 타일 수: {len(all_tile_files)}개")
+        
+        # 각 행/열별 실제 크기 계산 (실제 타일 이미지 기반)
+        row_heights = {}  # ty -> height
+        col_widths = {}   # tx -> width
+        
+        # 모든 타일의 크기 미리 측정
+        print("📏 타일 크기 측정 중...")
+        for (tx, ty), tile_path in all_tile_files.items():
+            try:
+                tile_img = cv2.imread(tile_path)
+                if tile_img is not None:
+                    h, w = tile_img.shape[:2]
+                    
+                    # 해당 행/열의 최대 크기 저장
+                    if ty not in row_heights:
+                        row_heights[ty] = h
+                    else:
+                        row_heights[ty] = max(row_heights[ty], h)
+                    
+                    if tx not in col_widths:
+                        col_widths[tx] = w
+                    else:
+                        col_widths[tx] = max(col_widths[tx], w)
+                else:
+                    print(f"⚠️ 타일 로드 실패: {tile_path}")
+            except Exception as e:
+                print(f"⚠️ 타일 크기 측정 실패 {tile_path}: {e}")
+        
         # 전체 이미지 크기 계산
-        max_x = max(pos[0] for pos in tile_positions.keys())
-        max_y = max(pos[1] for pos in tile_positions.keys())
-        
-        # 실제 타일들을 로드해서 정확한 크기 계산
-        total_width = 0
-        total_height = 0
-        tile_dimensions = {}  # 각 타일의 실제 크기 저장
-        
-        # 첫 번째 행의 모든 타일로 전체 너비 계산
-        for tx in range(max_x + 1):
-            if (tx, 0) in tile_files and tile_files[(tx, 0)]:
-                try:
-                    tile_img = cv2.imread(tile_files[(tx, 0)])
-                    if tile_img is not None:
-                        h, w = tile_img.shape[:2]
-                        tile_dimensions[(tx, 0)] = (w, h)
-                        total_width += w
-                    else:
-                        tile_dimensions[(tx, 0)] = (tile_size, tile_size)
-                        total_width += tile_size
-                except:
-                    tile_dimensions[(tx, 0)] = (tile_size, tile_size)
-                    total_width += tile_size
-            else:
-                tile_dimensions[(tx, 0)] = (tile_size, tile_size)
-                total_width += tile_size
-        
-        # 첫 번째 열의 모든 타일로 전체 높이 계산
-        for ty in range(max_y + 1):
-            if (0, ty) in tile_files and tile_files[(0, ty)]:
-                try:
-                    tile_img = cv2.imread(tile_files[(0, ty)])
-                    if tile_img is not None:
-                        h, w = tile_img.shape[:2]
-                        tile_dimensions[(0, ty)] = (w, h)
-                        total_height += h
-                    else:
-                        tile_dimensions[(0, ty)] = (tile_size, tile_size)
-                        total_height += tile_size
-                except:
-                    tile_dimensions[(0, ty)] = (tile_size, tile_size)
-                    total_height += tile_size
-            else:
-                tile_dimensions[(0, ty)] = (tile_size, tile_size)
-                total_height += tile_size
+        total_width = sum(col_widths.get(tx, tile_size) for tx in range(min_x, max_x + 1))
+        total_height = sum(row_heights.get(ty, tile_size) for ty in range(min_y, max_y + 1))
         
         print(f"📐 계산된 전체 이미지 크기: {total_width}x{total_height}")
+        print(f"📐 행별 높이: {row_heights}")
+        print(f"📐 열별 너비: {col_widths}")
         
-        # 전체 이미지 생성 (검은색 배경으로 시작)
-        merged_image = np.zeros((total_height, total_width, 3), dtype=np.uint8)
+        # 전체 이미지 생성 (회색 배경으로 시작 - 누락 영역 식별용)
+        merged_image = np.full((total_height, total_width, 3), (128, 128, 128), dtype=np.uint8)
         
         # 타일들을 순서대로 합치기
         current_y = 0
-        for ty in range(max_y + 1):
+        for ty in range(min_y, max_y + 1):
             current_x = 0
-            row_height = 0
+            row_height = row_heights.get(ty, tile_size)
             
-            for tx in range(max_x + 1):
-                tile_path = tile_files.get((tx, ty))
+            for tx in range(min_x, max_x + 1):
+                col_width = col_widths.get(tx, tile_size)
                 
-                if tile_path and os.path.exists(tile_path):
+                if (tx, ty) in all_tile_files:
+                    tile_path = all_tile_files[(tx, ty)]
                     try:
                         # 타일 이미지 로드
                         tile_img = cv2.imread(tile_path)
                         if tile_img is not None:
                             h, w = tile_img.shape[:2]
                             
-                            # 타일을 전체 이미지에 배치
+                            # 배치 영역 계산
                             end_x = min(current_x + w, total_width)
                             end_y = min(current_y + h, total_height)
                             
@@ -181,32 +209,30 @@ def create_merged_visualization(all_results: List[DetectionResult], output_base:
                             
                             if actual_w > 0 and actual_h > 0:
                                 merged_image[current_y:end_y, current_x:end_x] = tile_img[:actual_h, :actual_w]
-                            
-                            row_height = max(row_height, h)
-                            current_x += w
+                                print(f"✅ 타일 배치: ({tx},{ty}) at ({current_x},{current_y}) size={actual_w}x{actual_h}")
                         else:
-                            current_x += tile_size
-                            row_height = max(row_height, tile_size)
+                            print(f"❌ 타일 로드 실패: {tile_path}")
                     except Exception as e:
-                        print(f"⚠️ 타일 로드 실패 {tile_path}: {e}")
-                        current_x += tile_size
-                        row_height = max(row_height, tile_size)
+                        print(f"⚠️ 타일 처리 실패 {tile_path}: {e}")
                 else:
-                    current_x += tile_size
-                    row_height = max(row_height, tile_size)
+                    print(f"⚠️ 타일 누락: ({tx},{ty}) at ({current_x},{current_y})")
+                
+                current_x += col_width
             
             current_y += row_height
         
         print("🎯 타일 합치기 완료, 탐지 결과 그리기 시작...")
         
-        # 탐지 결과 그리기
+        # 탐지 결과 그리기 (개선된 좌표 계산)
+        detection_count = 0
         current_y_offset = 0
-        for ty in range(max_y + 1):
+        
+        for ty in range(min_y, max_y + 1):
             current_x_offset = 0
-            row_height = tile_dimensions.get((0, ty), (tile_size, tile_size))[1]
+            row_height = row_heights.get(ty, tile_size)
             
-            for tx in range(max_x + 1):
-                tile_width = tile_dimensions.get((tx, 0), (tile_size, tile_size))[0]
+            for tx in range(min_x, max_x + 1):
+                col_width = col_widths.get(tx, tile_size)
                 
                 # 해당 타일의 탐지 결과들 그리기
                 if (tx, ty) in tile_positions:
@@ -227,21 +253,38 @@ def create_merged_visualization(all_results: List[DetectionResult], output_base:
                         x2 = max(0, min(x2, total_width))
                         y2 = max(0, min(y2, total_height))
                         
-                        # 바운딩 박스 그리기 (얇은 초록색)
-                        cv2.rectangle(merged_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                        
-                        # 신뢰도 텍스트 추가
-                        if detection.confidence:
-                            text = f"{detection.confidence:.2f}"
-                            # 텍스트 배경 추가 (가독성 향상)
-                            text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)[0]
-                            cv2.rectangle(merged_image, (x1, y1-25), (x1 + text_size[0] + 10, y1), (0, 255, 0), -1)
-                            cv2.putText(merged_image, text, (x1 + 5, y1-8), 
-                                      cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
+                        if x2 > x1 and y2 > y1:  # 유효한 바운딩 박스만 그리기
+                            # 바운딩 박스 그리기 (두꺼운 초록색)
+                            cv2.rectangle(merged_image, (x1, y1), (x2, y2), (0, 255, 0), 3)
+                            
+                            # 신뢰도 텍스트 추가
+                            if detection.confidence:
+                                text = f"{detection.confidence:.3f}"
+                                # 텍스트 배경 추가 (가독성 향상)
+                                font_scale = 0.6
+                                font_thickness = 2
+                                text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thickness)[0]
+                                
+                                # 텍스트 위치 조정 (바운딩 박스 위쪽)
+                                text_y = max(y1 - 5, text_size[1] + 5)
+                                bg_y1 = text_y - text_size[1] - 5
+                                bg_y2 = text_y + 5
+                                bg_x1 = x1
+                                bg_x2 = min(x1 + text_size[0] + 10, total_width)
+                                
+                                # 배경 그리기
+                                cv2.rectangle(merged_image, (bg_x1, bg_y1), (bg_x2, bg_y2), (0, 255, 0), -1)
+                                # 텍스트 그리기
+                                cv2.putText(merged_image, text, (x1 + 5, text_y), 
+                                          cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), font_thickness)
+                            
+                            detection_count += 1
                 
-                current_x_offset += tile_width
+                current_x_offset += col_width
             
             current_y_offset += row_height
+        
+        print(f"✅ 탐지 결과 그리기 완료: {detection_count}개 바운딩 박스")
         
         # 합쳐진 시각화 이미지 저장
         merged_filename = f"merged_detection_{timestamp}.jpg"
@@ -391,203 +434,6 @@ def draw_bounding_boxes_on_image(image, results):
                           cv2.FONT_HERSHEY_SIMPLEX, font_scale, 
                           (255, 255, 255), font_thickness)
 
-@router.post("/detect", response_model=InferenceResponse)
-async def detect_damaged_trees(
-    files: List[UploadFile] = File(..., description="탐지할 이미지 파일들 (TIFF, JPG, PNG)"),
-    weights: str = Form(default=DEFAULT_WEIGHTS, description="YOLO 모델 가중치 경로"),
-    confidence: float = Form(default=0.3, description="신뢰도 임계값 (0.0~1.0) - 소나무 전용 최적화"),
-    iou_threshold: float = Form(default=0.6, description="IOU 임계값 (0.0~1.0) - 오탐지 방지"),
-    save_csv: bool = Form(default=True, description="CSV 파일로 결과 저장 여부"),
-    save_visualization: bool = Form(default=True, description="바운딩 박스가 그려진 시각화 이미지 저장 여부")
-):
-    """
-    업로드된 이미지에서 소나무재선충병 피해목을 탐지합니다.
-    
-    - **files**: 탐지할 이미지 파일들 (TIFF, JPG, PNG 지원)
-    - **weights**: YOLO 모델 가중치 파일 경로
-    - **confidence**: 탐지 신뢰도 임계값 (기본: 0.05)
-    - **iou_threshold**: IOU 임계값 (기본: 0.25)
-    - **save_csv**: CSV 파일로 결과 저장 여부 (기본: True)
-    - **save_visualization**: 바운딩 박스가 그려진 시각화 이미지 저장 여부 (기본: True)
-    """
-    
-    try:
-        # 모델 파일 존재 확인
-        if not os.path.exists(weights):
-            raise HTTPException(status_code=404, detail=f"모델 파일을 찾을 수 없습니다: {weights}")
-        
-        # YOLO 모델 로드
-        model = YOLO(weights)
-        
-        # 결과 저장용 리스트
-        all_results = []
-        damaged_count = 0
-        visualization_urls = []  # 시각화 이미지 URL 저장용
-        
-        # 세션 타임스탬프 생성 (파일명 일관성을 위해)
-        session_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        # 임시 디렉토리 생성
-        with tempfile.TemporaryDirectory() as temp_dir:
-            
-            # 각 파일 처리
-            for file in files:
-                # 파일 확장자 검증
-                if not file.filename.lower().endswith(('.tif', '.tiff', '.jpg', '.jpeg', '.png')):
-                    raise HTTPException(
-                        status_code=400, 
-                        detail=f"지원하지 않는 파일 형식입니다: {file.filename}"
-                    )
-                
-                # 임시 파일로 저장
-                temp_file_path = os.path.join(temp_dir, file.filename)
-                with open(temp_file_path, "wb") as buffer:
-                    shutil.copyfileobj(file.file, buffer)
-                
-                # 이미지 전처리 (4채널 -> 3채널 변환)
-                img = cv2.imread(temp_file_path, cv2.IMREAD_UNCHANGED)
-                if img is not None and len(img.shape) == 3 and img.shape[2] == 4:
-                    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
-                    cv2.imwrite(temp_file_path, img_rgb)
-                    img = img_rgb
-                
-                # 🗺️ TM 좌표 변환을 위한 지리참조 정보 추출
-                tfw_params = None
-                if file.filename.lower().endswith(('.tif', '.tiff')):
-                    # 1. TIFF 파일에서 직접 지리참조 정보 추출 시도
-                    tfw_params = get_tfw_from_tiff(temp_file_path)
-                    
-                    # 2. TFW 파일이 있는지 확인 (동일한 이름)
-                    if not tfw_params:
-                        tfw_path = temp_file_path.replace('.tif', '.tfw').replace('.tiff', '.tfw')
-                        if os.path.exists(tfw_path):
-                            tfw_params = load_tfw_file(tfw_path)
-                
-                # YOLO 추론 실행
-                yolo_results = model(temp_file_path, conf=confidence, iou=iou_threshold)
-                
-                # 결과 처리
-                for r in yolo_results:
-                    for box in r.boxes:
-                        class_id = int(box.cls[0])
-                        conf_score = float(box.conf[0])
-                        
-                        # 피해목 클래스(class_id=0)만 처리
-                        if class_id == 0:
-                            xmin, ymin, xmax, ymax = box.xyxy[0].tolist()
-                            
-                            # 정규화된 좌표 계산
-                            x_center = (xmin + xmax) / 2 / img.shape[1]
-                            y_center = (ymin + ymax) / 2 / img.shape[0]
-                            width = (xmax - xmin) / img.shape[1]
-                            height = (ymax - ymin) / img.shape[0]
-                            
-                            # 🗺️ TM 좌표 계산 (지리참조 정보가 있는 경우)
-                            tm_x, tm_y = None, None
-                            if tfw_params:
-                                # 픽셀 좌표 (박스 중심점)
-                                center_px = (xmin + xmax) / 2
-                                center_py = (ymin + ymax) / 2
-                                
-                                # 픽셀 좌표를 TM 좌표로 변환
-                                tm_x, tm_y = pixel_to_tm(center_px, center_py, tfw_params)
-                            
-                            result = DetectionResult(
-                                filename=file.filename,
-                                class_id=class_id,
-                                center_x=x_center,
-                                center_y=y_center,
-                                width=width,
-                                height=height,
-                                confidence=conf_score,
-                                tm_x=tm_x,  # TM 좌표 X
-                                tm_y=tm_y   # TM 좌표 Y
-                            )
-                            all_results.append(result)
-                            damaged_count += 1
-                
-                # 시각화 이미지 생성 및 저장
-                if save_visualization and yolo_results[0].boxes is not None and len(yolo_results[0].boxes) > 0:
-                    # 탐지된 객체가 있는 경우에만 시각화
-                    img_copy = img.copy()
-                    draw_bounding_boxes_on_image(img_copy, yolo_results)
-                    
-                    # 시각화 디렉토리 생성
-                    vis_dir = str(config.API_VISUALIZATION_DIR)
-                    os.makedirs(vis_dir, exist_ok=True)
-                    
-                    # 시각화 이미지 파일명 생성 (세션 타임스탬프 사용)
-                    name_without_ext = os.path.splitext(file.filename)[0]
-                    vis_filename = f"{name_without_ext}_detected_{session_timestamp}.jpg"
-                    vis_path = os.path.join(vis_dir, vis_filename)
-                    
-                    # 시각화 이미지 저장
-                    cv2.imwrite(vis_path, img_copy)
-                    
-                    # URL 생성
-                    vis_url = f"/api/v1/inference/visualization/{vis_filename}"
-                    visualization_urls.append(vis_url)
-        
-        # CSV 저장 처리
-        csv_file_url = None
-        if save_csv and all_results:
-            # 출력 디렉토리 생성
-            os.makedirs(DEFAULT_OUTPUT_DIR, exist_ok=True)
-            
-            # CSV 파일명 생성 (세션 타임스탬프 사용)
-            csv_filename = f"detection_results_{session_timestamp}.csv"
-            csv_path = os.path.join(DEFAULT_OUTPUT_DIR, csv_filename)
-            
-            # 🗺️ TM 좌표가 있는 경우 별도 CSV 생성
-            tm_results = [r for r in all_results if r.tm_x is not None and r.tm_y is not None]
-            
-            if tm_results:
-                # TM 좌표 CSV 저장 (첨부해주신 형식과 동일)
-                tm_csv_filename = f"damaged_trees_tm_coords_{session_timestamp}.csv"
-                tm_csv_path = os.path.join(DEFAULT_OUTPUT_DIR, tm_csv_filename)
-                
-                # TM 좌표 DataFrame 생성 (no, x, y 형식)
-                tm_data = []
-                for i, result in enumerate(tm_results, 1):
-                    tm_data.append({
-                        'no': i,
-                        'x': round(result.tm_x, 3),  # TM X 좌표 (소수점 3자리)
-                        'y': round(result.tm_y, 3)   # TM Y 좌표 (소수점 3자리)
-                    })
-                
-                df_tm = pd.DataFrame(tm_data)
-                df_tm.to_csv(tm_csv_path, index=False)
-                print(f"🗺️ TM 좌표 CSV 저장: {tm_csv_path}")
-                print(f"📊 TM 좌표 변환 성공: {len(tm_results)}개/{len(all_results)}개")
-            
-            # 기존 전체 정보 CSV 저장 (정규화 좌표 + TM 좌표 모두 포함)
-            df_results = pd.DataFrame([result.dict() for result in all_results])
-            df_results.to_csv(csv_path, index=False)
-            csv_file_url = f"/api/v1/inference/download/{csv_filename}"
-        
-        # 성공 메시지 생성
-        tm_count = len([r for r in all_results if r.tm_x is not None and r.tm_y is not None])
-        if tm_count > 0:
-            message = f"탐지 완료: {damaged_count}개의 피해목을 발견했습니다. (TM 좌표 변환: {tm_count}개)"
-        else:
-            message = f"탐지 완료: {damaged_count}개의 피해목을 발견했습니다. (지리참조 정보 없음)"
-        
-        return InferenceResponse(
-            success=True,
-            message=message,
-            detected_count=damaged_count,
-            results=all_results,
-            csv_file_url=csv_file_url,
-            visualization_images=visualization_urls if visualization_urls else None
-        )
-        
-    except Exception as e:
-        import traceback
-        error_detail = f"탐지 중 오류 발생: {str(e)}\n상세: {traceback.format_exc()}"
-        print(f"API ERROR: {error_detail}")  # 서버 로그에 출력
-        raise HTTPException(status_code=500, detail=f"탐지 중 오류 발생: {str(e)}")
-
-
 @router.get("/download/{filename}")
 async def download_csv_result(filename: str):
     """
@@ -663,8 +509,8 @@ async def list_available_models():
     }
 
 
-@router.post("/detect-all", response_model=BatchInferenceResponse)
-async def batch_inference(
+@router.post("/detect", response_model=BatchInferenceResponse)
+async def detect_damaged_trees(
     images_zip: UploadFile = File(..., description="추론할 이미지들이 포함된 ZIP 파일"),
     model_path: str = Form(default=DEFAULT_WEIGHTS, description="사용할 YOLO 모델 경로"),
     confidence: float = Form(default=0.5, description="탐지 신뢰도 임계값"),
@@ -673,15 +519,31 @@ async def batch_inference(
     output_tm_coordinates: bool = Form(default=True, description="TM 좌표 변환 여부")
 ):
     """
-    여러 이미지에 대한 배치 추론을 수행합니다.
-    ZIP 파일로 업로드된 이미지들을 일괄 처리하여 탐지 결과를 반환합니다.
+    🚀 **소나무재선충병 피해목 탐지 API**
     
-    - **images_zip**: 추론할 이미지들이 포함된 ZIP 파일
-    - **model_path**: 사용할 YOLO 모델 파일 경로
+    ZIP 파일로 업로드된 이미지들(또는 타일들)을 일괄 처리하여 피해목을 탐지합니다.
+    
+    **🎯 주요 기능:**
+    - 🖼️ 대용량 이미지 타일 일괄 처리
+    - 🔍 YOLO 모델 기반 피해목 자동 탐지
+    - 🗺️ TM 좌표 변환 (지리참조 정보 포함 시)
+    - 📊 CSV 결과 파일 생성
+    - 🎨 시각화 이미지 생성 (바운딩 박스 포함)
+    - 🖼️ 전체 이미지 병합 시각화
+    
+    **📋 매개변수:**
+    - **images_zip**: 추론할 이미지들이 포함된 ZIP 파일 (.zip)
+    - **model_path**: 사용할 YOLO 모델 파일 경로 (기본: 최적화된 소나무 모델)
     - **confidence**: 탐지 신뢰도 임계값 (0.0-1.0, 기본값: 0.5)
     - **iou_threshold**: IoU 임계값 (0.0-1.0, 중복 탐지 제거용, 기본값: 0.8)
-    - **save_visualization**: 탐지 결과 시각화 이미지 저장 여부
-    - **output_tm_coordinates**: TM 좌표 변환 출력 여부
+    - **save_visualization**: 탐지 결과 시각화 이미지 저장 여부 (기본: True)
+    - **output_tm_coordinates**: TM 좌표 변환 출력 여부 (기본: True)
+    
+    **🎯 출력:**
+    - 📊 탐지 통계 정보
+    - 📁 결과 ZIP 파일 (CSV + 시각화 이미지들)
+    - 🖼️ 병합된 전체 이미지 시각화
+    - 🗺️ TM 좌표가 포함된 CSV 파일
     """
     
     try:
