@@ -286,7 +286,7 @@ async def mark_single_image_auto_detect(
     box_color_r: int = Form(default=0, description="박스 색상 R값"),
     box_color_g: int = Form(default=255, description="박스 색상 G값"), 
     box_color_b: int = Form(default=0, description="박스 색상 B값"),
-    confidence_threshold: float = Form(default=0.02, description="신뢰도 임계값")
+    confidence_threshold: float = Form(default=config.DEFAULT_CONFIDENCE, description="신뢰도 임계값 (mAP50: 75.8% 모델 최적화)")
 ):
     """
     이미지를 업로드하면 자동으로 YOLO 모델로 탐지하고 바운딩박스를 마킹하여 반환합니다.

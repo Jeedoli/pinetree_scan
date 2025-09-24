@@ -398,7 +398,7 @@ async def create_dataset(
     csv_file: UploadFile = File(..., description="GPS 좌표 CSV 파일 (x, y 또는 longitude, latitude 컬럼)"),
     tfw_file: UploadFile = File(..., description="지리참조를 위한 TFW 파일"),
     file_prefix: str = Form(..., description="생성될 타일 파일명 접두사"),
-    tile_size: int = Form(default=1024, description="타일 크기 (픽셀)"),
+    tile_size: int = Form(default=config.DEFAULT_TILE_SIZE, description="타일 크기 (픽셀)"),
     bbox_size: int = Form(default=config.DEFAULT_BBOX_SIZE, description="바운딩 박스 크기 (픽셀)"),
     class_id: int = Form(default=0, description="YOLO 클래스 ID"),
     train_split: float = Form(default=0.8, description="학습 데이터 비율 (0.0-1.0)"),

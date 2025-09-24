@@ -99,7 +99,7 @@ def extract_tile_position(filename: str) -> tuple:
 
 
 def create_merged_visualization(all_results: List[DetectionResult], output_base: str, 
-                               timestamp: str, extract_dir: str, tile_size: int = 1024) -> Optional[str]:
+                               timestamp: str, extract_dir: str, tile_size: int = config.DEFAULT_TILE_SIZE) -> Optional[str]:
     """타일별 탐지 결과를 합쳐서 전체 이미지 시각화 생성"""
     
     if not all_results:
@@ -513,8 +513,8 @@ async def list_available_models():
 async def detect_damaged_trees(
     images_zip: UploadFile = File(..., description="추론할 이미지들이 포함된 ZIP 파일"),
     model_path: str = Form(default=DEFAULT_WEIGHTS, description="사용할 YOLO 모델 경로"),
-    confidence: float = Form(default=0.25, description="탐지 신뢰도 임계값 (타일 최적화: 0.25)"),
-    iou_threshold: float = Form(default=0.45, description="IoU 임계값 (중복 탐지 제거용)"),
+    confidence: float = Form(default=config.DEFAULT_CONFIDENCE, description="탐지 신뢰도 임계값 (mAP50: 75.8% 모델 최적화)"),
+    iou_threshold: float = Form(default=config.DEFAULT_IOU_THRESHOLD, description="IoU 임계값 (중복 탐지 제거용)"),
     save_visualization: bool = Form(default=True, description="탐지 결과 시각화 이미지 저장 여부"),
     output_tm_coordinates: bool = Form(default=True, description="TM 좌표 변환 여부")
 ):
@@ -758,7 +758,7 @@ async def detect_damaged_trees(
             merged_viz_filename = None
             if save_visualization and all_results:
                 merged_viz_filename = create_merged_visualization(
-                    all_results, output_base, timestamp, extract_dir, tile_size=1024
+                    all_results, output_base, timestamp, extract_dir, tile_size=config.DEFAULT_TILE_SIZE
                 )
             
             # 결과 ZIP 파일 생성

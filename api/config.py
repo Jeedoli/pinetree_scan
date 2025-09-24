@@ -21,9 +21,9 @@ API_VISUALIZATION_DIR = API_OUTPUT_BASE / "visualizations"
 DEFAULT_MODEL_PATH = MODELS_DIR / "colab_yolo" / "best.pt"
 # FALLBACK_MODEL_PATH는 제거 (실제 존재하는 모델만 사용)
 
-# YOLO 기본 파라미터 (실제 모델 성능에 맞춘 최적화)
-DEFAULT_CONFIDENCE = 0.02  # 0.25 → 0.02 (실제 모델 탐지 신뢰도에 맞춤)
-DEFAULT_IOU_THRESHOLD = 0.45  # 0.25 → 0.45 (기본 YOLO 설정)
+# YOLO 기본 파라미터 (mAP50: 75.8% 모델에 최적화)
+DEFAULT_CONFIDENCE = 0.15  # 학습 성능 기반 최적 신뢰도 (Precision 74.9% 고려)
+DEFAULT_IOU_THRESHOLD = 0.45  # 표준 YOLO IoU 임계값
 
 # 전처리 기본 설정 (디테일 보존을 위한 1024 복원)
 DEFAULT_TILE_SIZE = 1024  # 2048 → 1024 (세밀한 탐지)
