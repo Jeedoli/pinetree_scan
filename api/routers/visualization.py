@@ -281,25 +281,19 @@ async def download_visualization_result(filename: str):
 
 
 @router.post("/single_image")
-async def mark_single_image(
-    image: UploadFile = File(..., description="시각화할 단일 이미지"),
-    detection_results: str = Form(..., description="탐지 결과 JSON 문자열"),
+async def mark_single_image_auto_detect(
+    image: UploadFile = File(..., description="자동 탐지 후 시각화할 이미지"),
     box_color_r: int = Form(default=0, description="박스 색상 R값"),
-    box_color_g: int = Form(default=0, description="박스 색상 G값"),
-    box_color_b: int = Form(default=255, description="박스 색상 B값")
+    box_color_g: int = Form(default=255, description="박스 색상 G값"), 
+    box_color_b: int = Form(default=0, description="박스 색상 B값"),
+    confidence_threshold: float = Form(default=0.02, description="신뢰도 임계값")
 ):
     """
-    단일 이미지에 탐지 결과를 마킹하여 즉시 반환합니다.
+    이미지를 업로드하면 자동으로 YOLO 모델로 탐지하고 바운딩박스를 마킹하여 반환합니다.
     """
-    import json
+    from ultralytics import YOLO
     
     try:
-        # JSON 파싱
-        try:
-            results = json.loads(detection_results)
-        except:
-            raise HTTPException(status_code=400, detail="잘못된 JSON 형식입니다.")
-        
         # 임시 파일 생성
         with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as tmp_file:
             
@@ -308,18 +302,51 @@ async def mark_single_image(
             with open(temp_input, "wb") as f:
                 shutil.copyfileobj(image.file, f)
             
-            # 이미지 로드 및 박스 마킹
+            # 이미지 로드
             img = load_image_safely(temp_input)
             if img is None:
                 raise HTTPException(status_code=400, detail="이미지를 로드할 수 없습니다.")
             
+            # YOLO 모델 로드 및 추론
+            model = YOLO(str(config.DEFAULT_MODEL_PATH))
+            results = model(temp_input, conf=confidence_threshold, verbose=False)
+            
             box_color = (box_color_b, box_color_g, box_color_r)
+            detection_count = 0
             
-            # 탐지 결과를 DataFrame으로 변환하여 처리
-            df_results = pd.DataFrame(results)
-            
-            if not df_results.empty:
-                mark_boxes_on_single_image(img, df_results, box_color)
+            # 추론 결과가 있으면 바운딩박스 그리기
+            if results and len(results) > 0:
+                result = results[0]
+                if result.boxes is not None and len(result.boxes) > 0:
+                    boxes = result.boxes
+                    detection_count = len(boxes)
+                    
+                    # 각 박스에 대해 그리기
+                    for i in range(len(boxes)):
+                        # YOLO 형식 (xyxy)을 픽셀 좌표로 변환
+                        bbox = boxes.xyxy[i].cpu().numpy().astype(int)
+                        confidence = float(boxes.conf[i].cpu().numpy())
+                        class_id = int(boxes.cls[i].cpu().numpy())
+                        class_name = model.names[class_id] if hasattr(model, 'names') else f'class_{class_id}'
+                        
+                        # 바운딩 박스 그리기
+                        cv2.rectangle(img, (bbox[0], bbox[1]), (bbox[2], bbox[3]), box_color, 2)
+                        
+                        # 라벨 텍스트 (클래스명 + 신뢰도)
+                        label = f"{class_name}: {confidence:.2f}"
+                        label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
+                        
+                        # 라벨 배경 그리기
+                        cv2.rectangle(img, 
+                                    (bbox[0], bbox[1] - label_size[1] - 10), 
+                                    (bbox[0] + label_size[0], bbox[1]), 
+                                    box_color, -1)
+                        
+                        # 라벨 텍스트 그리기
+                        cv2.putText(img, label, 
+                                  (bbox[0], bbox[1] - 5), 
+                                  cv2.FONT_HERSHEY_SIMPLEX, 0.5, 
+                                  (255, 255, 255), 1)
             
             # 결과 이미지 저장
             cv2.imwrite(tmp_file.name, img)
@@ -327,10 +354,18 @@ async def mark_single_image(
             # 임시 입력 파일 삭제
             os.unlink(temp_input)
             
+            # 응답 헤더에 탐지 정보 추가
+            headers = {
+                "X-Detection-Count": str(detection_count),
+                "X-Confidence-Threshold": str(confidence_threshold),
+                "X-Box-Color": f"RGB({box_color_r},{box_color_g},{box_color_b})"
+            }
+            
             return FileResponse(
                 path=tmp_file.name,
-                filename=f"marked_{image.filename}",
-                media_type='image/png'
+                filename=f"detected_{detection_count}_objects_{image.filename}",
+                media_type='image/png',
+                headers=headers
             )
             
     except HTTPException:
