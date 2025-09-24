@@ -12,10 +12,17 @@ import shutil
 from typing import List, Optional
 import json
 from datetime import datetime
-from . import config
+import sys
+from pathlib import Path
+
+# 프로젝트 루트를 sys.path에 추가
+project_root = Path(__file__).parent.parent
+sys.path.append(str(project_root))
+
+from api import config
 
 # 라우터 import
-from .routers import inference, preprocessing, visualization
+from api.routers import inference, preprocessing, visualization, model_performance
 
 # FastAPI 앱 생성
 app = FastAPI(
@@ -42,6 +49,7 @@ app.add_middleware(
 app.include_router(inference.router, prefix="/api/v1/inference", tags=["추론/탐지"])
 app.include_router(preprocessing.router, prefix="/api/v1/preprocessing", tags=["전처리"])
 app.include_router(visualization.router, prefix="/api/v1/visualization", tags=["시각화"])
+app.include_router(model_performance.router, prefix="/api/v1/model-performance", tags=["모델 성능 분석"])
 
 # 서버 시작 시 필요한 디렉토리 생성
 @app.on_event("startup")
@@ -69,13 +77,15 @@ async def root():
         "endpoints": {
             "inference": "/api/v1/inference",
             "preprocessing": "/api/v1/preprocessing",
-            "visualization": "/api/v1/visualization"
+            "visualization": "/api/v1/visualization",
+            "model_performance": "/api/v1/model-performance"
         },
         "recommended_apis": {
             "🚀 통합 딥러닝 데이터셋 생성": "/api/v1/preprocessing/create_complete_training_dataset",
             "🔍 이미지 추론": "/api/v1/inference/predict",
             "📊 배치 추론": "/api/v1/inference/batch_predict", 
-            "🎨 결과 시각화": "/api/v1/visualization/create_visualization"
+            "🎨 결과 시각화": "/api/v1/visualization/create_visualization",
+            "🎯 모델 성능 분석": "/api/v1/model-performance/analyze"
         },
         "legacy_apis": {
             "⚠️ 타일링만 (레거시)": "/api/v1/preprocessing/tile_and_label"

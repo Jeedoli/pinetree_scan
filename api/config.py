@@ -21,9 +21,9 @@ API_VISUALIZATION_DIR = API_OUTPUT_BASE / "visualizations"
 DEFAULT_MODEL_PATH = MODELS_DIR / "colab_yolo" / "best.pt"
 # FALLBACK_MODEL_PATH는 제거 (실제 존재하는 모델만 사용)
 
-# YOLO 기본 파라미터
-DEFAULT_CONFIDENCE = 0.05
-DEFAULT_IOU_THRESHOLD = 0.25
+# YOLO 기본 파라미터 (실제 모델 성능에 맞춘 최적화)
+DEFAULT_CONFIDENCE = 0.02  # 0.25 → 0.02 (실제 모델 탐지 신뢰도에 맞춤)
+DEFAULT_IOU_THRESHOLD = 0.45  # 0.25 → 0.45 (기본 YOLO 설정)
 
 # 전처리 기본 설정 (디테일 보존을 위한 1024 복원)
 DEFAULT_TILE_SIZE = 1024  # 2048 → 1024 (세밀한 탐지)
@@ -36,10 +36,10 @@ VISUALIZATION_FONT_SCALE = 0.5                  # 작은 폰트 크기
 VISUALIZATION_FONT_THICKNESS = 1                # 얇은 폰트
 VISUALIZATION_TEXT_COLOR = (255, 255, 255)      # 흰색 텍스트
 
-# 🎯 소나무 전용 탐지 임계값
-DEFAULT_CONFIDENCE_THRESHOLD = 0.5              # 더 높은 신뢰도 (오탐지 방지)
-DEFAULT_IOU_THRESHOLD = 0.8                     # 더 높은 IoU (정확한 위치)
-PINE_DETECTION_MIN_CONFIDENCE = 0.25            # 최소 신뢰도
+# 🎯 소나무 전용 탐지 임계값 (실제 성능 기반 조정)
+DEFAULT_CONFIDENCE_THRESHOLD = 0.02             # 실제 탐지 성능에 맞춘 신뢰도
+DEFAULT_IOU_THRESHOLD = 0.45                    # 적절한 IoU (중복 제거)
+PINE_DETECTION_MIN_CONFIDENCE = 0.01            # 최소 신뢰도 (매우 낮게)
 PINE_DETECTION_MAX_DETECTIONS = 100             # 최대 탐지 수
 
 # 🌲 바운딩 박스 크기 조정
