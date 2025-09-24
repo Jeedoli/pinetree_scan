@@ -513,8 +513,8 @@ async def list_available_models():
 async def detect_damaged_trees(
     images_zip: UploadFile = File(..., description="추론할 이미지들이 포함된 ZIP 파일"),
     model_path: str = Form(default=DEFAULT_WEIGHTS, description="사용할 YOLO 모델 경로"),
-    confidence: float = Form(default=0.5, description="탐지 신뢰도 임계값"),
-    iou_threshold: float = Form(default=0.8, description="IoU 임계값 (중복 탐지 제거용)"),
+    confidence: float = Form(default=0.25, description="탐지 신뢰도 임계값 (타일 최적화: 0.25)"),
+    iou_threshold: float = Form(default=0.45, description="IoU 임계값 (중복 탐지 제거용)"),
     save_visualization: bool = Form(default=True, description="탐지 결과 시각화 이미지 저장 여부"),
     output_tm_coordinates: bool = Form(default=True, description="TM 좌표 변환 여부")
 ):
@@ -559,8 +559,15 @@ async def detect_damaged_trees(
         if not os.path.exists(model_path):
             raise HTTPException(status_code=400, detail=f"모델 파일을 찾을 수 없습니다: {model_path}")
         
-        # YOLO 모델 로드
+        # YOLO 모델 로드 (디버깅 정보 추가)
+        print(f"🤖 모델 로딩: {model_path}")
         model = YOLO(model_path)
+        
+        # 모델 정보 출력
+        print(f"  📋 모델 정보:")
+        print(f"    - 클래스 수: {len(model.names) if hasattr(model, 'names') else 'Unknown'}")
+        print(f"    - 클래스 명: {model.names if hasattr(model, 'names') else 'Unknown'}")
+        print(f"    - 모델 크기: {os.path.getsize(model_path) / 1024 / 1024:.1f}MB")
         
         # 임시 디렉토리 생성
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -610,7 +617,8 @@ async def detect_damaged_trees(
                     image_name = os.path.basename(image_path)
                     print(f"🔍 처리 중 ({idx}/{len(image_files)}): {image_name}")
                     
-                    # 개별 이미지 추론
+                    # 개별 이미지 추론 (디버깅 정보 추가)
+                    print(f"  🎯 추론 파라미터: conf={confidence}, iou={iou_threshold}")
                     results = model(image_path, conf=confidence, iou=iou_threshold)
                     
                     # TFW 정보 추출 (TM 좌표 변환용)
@@ -623,12 +631,19 @@ async def detect_damaged_trees(
                             if os.path.exists(tfw_file_path):
                                 tfw_params = load_tfw_file(tfw_file_path)
                     
-                    # 결과 처리
+                    # 결과 처리 (디버깅 정보 추가)
                     image_results = []
+                    raw_detections = 0  # 원시 탐지 수
+                    
                     for result in results:
                         boxes = result.boxes
                         if boxes is not None:
-                            for box in boxes:
+                            raw_detections += len(boxes)
+                            print(f"  📊 원시 탐지 수: {len(boxes)}개 (conf >= {confidence})")
+                            
+                            for i, box in enumerate(boxes):
+                                conf_value = float(box.conf[0].cpu().numpy())
+                                print(f"    탐지 {i+1}: 신뢰도 {conf_value:.4f}")
                                 # 바운딩 박스 정보 추출
                                 x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
                                 center_x = (x1 + x2) / 2
@@ -692,7 +707,16 @@ async def detect_damaged_trees(
                     del results
                     
                     processed_images.append(image_name)
-                    print(f"✅ 완료: {image_name} ({len(image_results)}개 탐지)")
+                    print(f"✅ 완료: {image_name} (원시: {raw_detections}개, 최종: {len(image_results)}개 탐지)")
+                    
+                    # 탐지가 없는 경우 추가 디버깅
+                    if raw_detections == 0:
+                        print(f"  ⚠️ 탐지 없음: {image_name} - 신뢰도 {confidence} 기준")
+                        # 낮은 신뢰도로 재시도
+                        debug_results = model(image_path, conf=0.01, iou=iou_threshold)
+                        debug_count = sum(len(r.boxes) if r.boxes is not None else 0 for r in debug_results)
+                        print(f"  🔍 디버그 (conf=0.01): {debug_count}개 탐지")
+                        del debug_results
                     
                 except Exception as e:
                     failed_images.append(f"{os.path.basename(image_path)}: {str(e)}")
