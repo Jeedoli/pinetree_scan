@@ -29,6 +29,10 @@ DEFAULT_IOU_THRESHOLD = 0.25  # 엄격한 IoU로 중복 제거 (0.45→0.25)
 DEFAULT_TILE_SIZE = 1024  # 2048 → 1024 (세밀한 탐지)
 # DEFAULT_BBOX_SIZE = 32    # ❌ 고정 크기 제거 - Multi-scale detection 지원
 
+# 바운딩박스 크기 범위 설정
+MIN_BBOX_SIZE = 10   # 최소 바운딩박스 크기 (픽셀)
+MAX_BBOX_SIZE = 200  # 최대 바운딩박스 크기 (픽셀)
+
 #  소나무 전용 시각화 설정
 VISUALIZATION_BBOX_COLOR = (0, 255, 0)          # 기본 녹색
 VISUALIZATION_BBOX_THICKNESS = 2                # 얇은 선 두께
