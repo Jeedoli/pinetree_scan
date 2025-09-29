@@ -88,9 +88,14 @@ class InferenceTilingResponse(BaseModel):
 
 # 기본 설정
 DEFAULT_TILE_SIZE = config.DEFAULT_TILE_SIZE
-DEFAULT_BBOX_SIZE = config.DEFAULT_BBOX_SIZE
+# DEFAULT_BBOX_SIZE = config.DEFAULT_BBOX_SIZE  # ❌ 제거 - Multi-Scale Detection 지원
 DEFAULT_CLASS_ID = config.DEFAULT_CLASS_ID
 DEFAULT_OUTPUT_DIR = Path(config.API_TILES_DIR)  # Path 객체로 변경
+
+# 🌲 Multi-Scale Dynamic Bounding Box 설정
+MIN_BBOX_SIZE = config.MIN_BBOX_SIZE  # 10px
+MAX_BBOX_SIZE = config.MAX_BBOX_SIZE  # 200px
+DEFAULT_BBOX_SIZES = config.DEFAULT_BBOX_SIZES  # [16, 32, 64, 128]
 
 # 헬퍼 함수들
 def load_tfw(tfw_path):
@@ -106,15 +111,144 @@ def tm_to_pixel(x, y, tfw):
     py = (y - F) / E
     return px, py
 
+def calculate_dynamic_bbox_size(row, default_size=32):
+    """
+    🌲 CSV 행 데이터를 기반으로 동적 바운딩박스 크기 계산
+    
+    Args:
+        row: CSV 행 데이터 (pandas Series)
+        default_size: 기본 크기 (정보가 없을 경우)
+    
+    Returns:
+        int: 계산된 바운딩박스 크기 (MIN_BBOX_SIZE ~ MAX_BBOX_SIZE 범위)
+    """
+    base_size = default_size
+    
+    try:
+        # 🎯 피해목 특성 기반 크기 조정 로직
+        
+        # 1. 나이/크기 정보가 있는 경우 (age, dbh, height 등)
+        if 'age' in row and pd.notna(row.get('age')):
+            age = float(row['age'])
+            # 나이에 따른 크기 조정 (1년 = 1.5px 추가)
+            age_factor = min(age * 1.5, 80)  # 최대 80px까지 증가
+            base_size += age_factor
+        
+        elif 'dbh' in row and pd.notna(row.get('dbh')):  # 직경 정보
+            dbh = float(row['dbh'])
+            # DBH(cm) * 2 = bbox 크기 조정
+            dbh_factor = min(dbh * 2, 100)
+            base_size += dbh_factor
+            
+        elif 'height' in row and pd.notna(row.get('height')):  # 높이 정보
+            height = float(row['height'])
+            # 높이(m) * 3 = bbox 크기 조정
+            height_factor = min(height * 3, 90)
+            base_size += height_factor
+        
+        # 2. 피해 정도에 따른 크기 조정
+        if 'damage_level' in row and pd.notna(row.get('damage_level')):
+            damage = row['damage_level']
+            if isinstance(damage, str):
+                # 텍스트 기반 피해 등급
+                damage_multiplier = {
+                    'light': 0.8, 'mild': 0.85, 'moderate': 1.0,
+                    'severe': 1.2, 'heavy': 1.3, 'critical': 1.4,
+                    '경미': 0.8, '보통': 1.0, '심함': 1.2, '매우심함': 1.4
+                }.get(damage.lower(), 1.0)
+            else:
+                # 숫자 기반 피해 등급 (0-5 스케일)
+                damage_multiplier = 0.7 + (float(damage) * 0.15)
+            
+            base_size *= damage_multiplier
+        
+        # 3. 수종에 따른 크기 조정 (소나무 계열)
+        if 'species' in row and pd.notna(row.get('species')):
+            species = str(row['species']).lower()
+            species_multiplier = {
+                'pine': 1.0, 'pinus': 1.0, '소나무': 1.0,
+                'red_pine': 1.1, '적송': 1.1,
+                'black_pine': 1.2, '흑송': 1.2,
+                'young': 0.7, '유목': 0.7,
+                'mature': 1.3, '성목': 1.3,
+                'old': 1.5, '고목': 1.5
+            }.get(species, 1.0)
+            base_size *= species_multiplier
+        
+        # 4. 기본 크기 다양성 추가 (동일 크기 방지)
+        # 위치 기반 약간의 랜덤성 (재현 가능)
+        if 'x' in row and 'y' in row:
+            position_hash = hash(f"{row.get('x', 0)}{row.get('y', 0)}") % 100
+            size_variation = (position_hash / 100 - 0.5) * 8  # ±4px 변동
+            base_size += size_variation
+        
+    except Exception as e:
+        # 오류 발생 시 기본 크기 사용
+        logging.warning(f"Dynamic bbox size calculation error: {e}")
+        pass
+    
+    # 최종 크기 제한 및 정수 변환
+    final_size = int(max(MIN_BBOX_SIZE, min(base_size, MAX_BBOX_SIZE)))
+    
+    return final_size
+
+def get_multi_scale_bbox_sizes(row, num_scales=3):
+    """
+    🎯 Multi-Scale Detection을 위한 다중 바운딩박스 크기 생성
+    
+    Args:
+        row: CSV 행 데이터
+        num_scales: 생성할 스케일 수
+    
+    Returns:
+        list: 다양한 크기의 바운딩박스 리스트
+    """
+    base_size = calculate_dynamic_bbox_size(row)
+    
+    # 기본 크기를 중심으로 다중 스케일 생성
+    scales = [0.7, 1.0, 1.4]  # 작은, 기본, 큰 크기
+    if num_scales >= 4:
+        scales = [0.6, 0.8, 1.0, 1.3, 1.6]  # 더 세밀한 스케일
+    
+    bbox_sizes = []
+    for scale in scales[:num_scales]:
+        size = int(base_size * scale)
+        size = max(MIN_BBOX_SIZE, min(size, MAX_BBOX_SIZE))
+        bbox_sizes.append(size)
+    
+    # 중복 제거 및 정렬
+    bbox_sizes = sorted(list(set(bbox_sizes)))
+    
+    return bbox_sizes
+
 def process_tiles_and_labels(image_path, tfw_params, df, output_images, output_labels, 
                            tile_size, bbox_size, class_id, file_prefix):
-    """이미지 타일 분할 및 각 타일별 YOLO 라벨 생성"""
+    """기존 호환성을 위한 래퍼 함수 (deprecated)"""
+    return process_tiles_and_labels_multiscale(
+        image_path, tfw_params, df, output_images, output_labels, 
+        tile_size, class_id, file_prefix, enable_multiscale=False
+    )
+
+def process_tiles_and_labels_multiscale(image_path, tfw_params, df, output_images, output_labels, 
+                                       tile_size, class_id, file_prefix, enable_multiscale=True):
+    """
+    🌲 Multi-Scale 이미지 타일 분할 및 동적 YOLO 라벨 생성
+    
+    Args:
+        enable_multiscale: True시 동적 바운딩박스, False시 기본 32px
+    """
     tile_info = []
     
     with rasterio.open(image_path) as src:
         width, height = src.width, src.height
         n_tiles_x = int(np.ceil(width / tile_size))
         n_tiles_y = int(np.ceil(height / tile_size))
+        
+        total_tiles = n_tiles_x * n_tiles_y
+        processed_tiles = 0
+        
+        print(f"🎯 타일 분할 시작: {width}x{height} → {n_tiles_x}x{n_tiles_y} = {total_tiles}개 타일", flush=True)
+        print(f"📊 GPS 포인트 {len(df)}개를 {total_tiles}개 타일에 분배 중...", flush=True)
         
         for ty in range(n_tiles_y):
             for tx in range(n_tiles_x):
@@ -128,25 +262,59 @@ def process_tiles_and_labels(image_path, tfw_params, df, output_images, output_l
                 tile_img = src.read([1, 2, 3], window=window)
                 tile_name = f"{file_prefix}_{tx}_{ty}.tif"
                 
-                # 타일 내 bbox 라벨 생성
+                # 🎯 Multi-Scale 타일 내 bbox 라벨 생성
                 lines = []
-                for _, row in df.iterrows():
-                    px, py = tm_to_pixel(row["x"], row["y"], tfw_params)
+                
+                # 🚀 성능 최적화: 타일 영역에 포함될 가능성이 있는 좌표만 필터링
+                # 전체 좌표를 픽셀로 변환 (한 번만 계산)
+                if not hasattr(process_tiles_and_labels_multiscale, '_pixel_coords'):
+                    print("🔄 GPS 좌표를 픽셀 좌표로 변환 중... (최초 1회)", flush=True)
+                    pixel_coords = []
+                    for _, row in df.iterrows():
+                        px, py = tm_to_pixel(row["x"], row["y"], tfw_params)
+                        pixel_coords.append((px, py, row))
+                    process_tiles_and_labels_multiscale._pixel_coords = pixel_coords
+                    print(f"✅ {len(pixel_coords)}개 좌표 변환 완료", flush=True)
+                
+                # 현재 타일 영역에 포함되는 좌표만 처리
+                for px, py, row in process_tiles_and_labels_multiscale._pixel_coords:
                     # 타일 내 상대좌표로 변환
                     rel_x = px - x0
                     rel_y = py - y0
                     if 0 <= rel_x < w and 0 <= rel_y < h:
                         x_center = rel_x / w
                         y_center = rel_y / h
-                        bw = bbox_size / w
-                        bh = bbox_size / h
-                        lines.append(
-                            f"{class_id} {x_center:.6f} {y_center:.6f} {bw:.6f} {bh:.6f}"
-                        )
+                        
+                        if enable_multiscale:
+                            # 🌲 동적 바운딩박스 크기 계산
+                            dynamic_size = calculate_dynamic_bbox_size(row, default_size=32)
+                            
+                            # Multi-Scale 라벨 생성 (주 스케일만 사용 - 중복 방지)
+                            bw = dynamic_size / w
+                            bh = dynamic_size / h
+                            
+                            lines.append(
+                                f"{class_id} {x_center:.6f} {y_center:.6f} {bw:.6f} {bh:.6f}"
+                            )
+                        else:
+                            # 기존 고정 크기 (호환성)
+                            bbox_size = 32
+                            bw = bbox_size / w
+                            bh = bbox_size / h
+                            lines.append(
+                                f"{class_id} {x_center:.6f} {y_center:.6f} {bw:.6f} {bh:.6f}"
+                            )
                 
                 # 라벨이 있는 경우에만 저장
                 labels_count = len(lines)
                 saved = labels_count > 0
+                
+                # 진행상황 출력 (10% 단위)
+                processed_tiles += 1
+                if processed_tiles % max(1, total_tiles // 10) == 0 or processed_tiles == total_tiles:
+                    progress_pct = (processed_tiles / total_tiles) * 100
+                    tiles_with_labels = sum(1 for t in tile_info if hasattr(t, 'labels_count') and t.labels_count > 0) + (1 if saved else 0)
+                    print(f"  📊 진행상황: {processed_tiles}/{total_tiles} ({progress_pct:.1f}%) - 라벨 있는 타일: {tiles_with_labels}개", flush=True)
                 
                 if saved:
                     # 라벨 파일 저장
@@ -178,6 +346,11 @@ def process_tiles_and_labels(image_path, tfw_params, df, output_images, output_l
                     tile_size=(w, h),
                     position=(tx, ty)
                 ))
+    
+    # 최종 통계 출력
+    tiles_with_labels = sum(1 for t in tile_info if t.labels_count > 0)
+    total_labels = sum(t.labels_count for t in tile_info)
+    print(f"✅ 타일 분할 완료: {total_tiles}개 타일 생성, {tiles_with_labels}개 라벨 타일, {total_labels}개 총 라벨", flush=True)
     
     return tile_info
 
@@ -228,7 +401,8 @@ async def preprocessing_status():
         "recent_tiles": recent_tiles,
         "default_settings": {
             "tile_size": DEFAULT_TILE_SIZE,
-            "bbox_size": DEFAULT_BBOX_SIZE,
+            "bbox_sizes": DEFAULT_BBOX_SIZES,  # Multi-Scale 지원
+            "bbox_range": f"{MIN_BBOX_SIZE}-{MAX_BBOX_SIZE}px",
             "class_id": DEFAULT_CLASS_ID
         }
     }
@@ -399,7 +573,8 @@ async def create_dataset(
     tfw_file: UploadFile = File(..., description="지리참조를 위한 TFW 파일"),
     file_prefix: str = Form(..., description="생성될 타일 파일명 접두사"),
     tile_size: int = Form(default=config.DEFAULT_TILE_SIZE, description="타일 크기 (픽셀)"),
-    bbox_size: int = Form(default=config.DEFAULT_BBOX_SIZE, description="바운딩 박스 크기 (픽셀)"),
+    enable_multiscale: bool = Form(default=True, description="Multi-Scale 동적 바운딩박스 사용 (True: 동적, False: 32px 고정)"),
+    base_bbox_size: int = Form(default=32, description="기본 바운딩박스 크기 (Multi-Scale 비활성화시만 사용)"),
     class_id: int = Form(default=0, description="YOLO 클래스 ID"),
     train_split: float = Form(default=0.8, description="학습 데이터 비율 (0.0-1.0)"),
     class_names: str = Form(default="damaged_tree", description="클래스 이름 (쉼표로 구분)"),
@@ -433,7 +608,10 @@ async def create_dataset(
     - **tfw_file**: 지리참조를 위한 TFW 파일 (.tfw)
     - **file_prefix**: 생성될 타일 파일명 접두사 (예: "A20250919")
     - **tile_size**: 타일 크기 (기본: 1024px, 세밀한 탐지 최적화)
-    - **bbox_size**: 바운딩 박스 크기 (기본: 32px, 중간 크기 피해목 탐지 최적화)
+    - **enable_multiscale**: 🌲 Multi-Scale 동적 바운딩박스 사용 (기본: True)
+      - `True`: CSV 데이터 기반 동적 크기 계산 (10-200px 범위)
+      - `False`: 고정 크기 사용 (호환성 모드)
+    - **base_bbox_size**: 고정 모드시 바운딩박스 크기 (기본: 32px)
     - **class_id**: YOLO 클래스 ID (기본: 0)
     - **train_split**: 학습 데이터 비율 (기본: 0.8 = 80% 학습, 20% 검증)
     - **class_names**: 클래스 이름 (쉼표로 구분, 기본: "damaged_tree")
@@ -536,19 +714,35 @@ async def create_dataset(
             
             print(f"📊 GPS 좌표 데이터: {len(df)}개 포인트", flush=True)
             
-            # Step 1: 타일링 및 라벨 생성
-            print("🔄 Step 1: 타일링 및 라벨 생성 시작...", flush=True)
-            tile_info = process_tiles_and_labels(
-                image_path=image_path,
-                tfw_params=tfw_params,
-                df=df,
-                output_images=str(tiles_images_dir),
-                output_labels=str(tiles_labels_dir),
-                tile_size=tile_size,
-                bbox_size=bbox_size,
-                class_id=class_id,
-                file_prefix=file_prefix
-            )
+            # Step 1: 🌲 Multi-Scale 타일링 및 라벨 생성
+            print(f"🔄 Step 1: {'Multi-Scale 동적' if enable_multiscale else '고정 크기'} 타일링 및 라벨 생성 시작...", flush=True)
+            
+            if enable_multiscale:
+                print("🎯 Multi-Scale 동적 바운딩박스 모드 활성화", flush=True)
+                tile_info = process_tiles_and_labels_multiscale(
+                    image_path=image_path,
+                    tfw_params=tfw_params,
+                    df=df,
+                    output_images=str(tiles_images_dir),
+                    output_labels=str(tiles_labels_dir),
+                    tile_size=tile_size,
+                    class_id=class_id,
+                    file_prefix=file_prefix,
+                    enable_multiscale=True
+                )
+            else:
+                print(f"📦 고정 크기 바운딩박스 모드: {base_bbox_size}px", flush=True)
+                tile_info = process_tiles_and_labels(
+                    image_path=image_path,
+                    tfw_params=tfw_params,
+                    df=df,
+                    output_images=str(tiles_images_dir),
+                    output_labels=str(tiles_labels_dir),
+                    tile_size=tile_size,
+                    bbox_size=base_bbox_size,
+                    class_id=class_id,
+                    file_prefix=file_prefix
+                )
             
             tiles_with_labels = sum(1 for t in tile_info if t.labels_count > 0)
             total_labels = sum(t.labels_count for t in tile_info)
@@ -558,7 +752,9 @@ async def create_dataset(
                 "tiles_with_labels": tiles_with_labels,
                 "total_labels": total_labels,
                 "tile_size": tile_size,
-                "bbox_size": bbox_size,
+                "multiscale_enabled": enable_multiscale,
+                "bbox_mode": "Multi-Scale Dynamic" if enable_multiscale else f"Fixed {base_bbox_size}px",
+                "bbox_range": f"{MIN_BBOX_SIZE}-{MAX_BBOX_SIZE}px" if enable_multiscale else f"{base_bbox_size}px",
                 "file_prefix": file_prefix
             }
             
@@ -651,7 +847,8 @@ async def create_dataset(
                     'csv_file': csv_file.filename,
                     'total_coordinates': len(df),
                     'tile_size': tile_size,
-                    'bbox_size': bbox_size
+                    'multiscale_enabled': enable_multiscale,
+                    'bbox_mode': "Multi-Scale Dynamic" if enable_multiscale else f"Fixed {base_bbox_size}px"
                 },
                 'dataset_stats': {
                     'total_files': len(matched_files),
