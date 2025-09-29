@@ -21,41 +21,22 @@ API_VISUALIZATION_DIR = API_OUTPUT_BASE / "visualizations"
 DEFAULT_MODEL_PATH = MODELS_DIR / "colab_yolo" / "best.pt"
 # FALLBACK_MODEL_PATH는 제거 (실제 존재하는 모델만 사용)
 
-# YOLO 기본 파라미터 (mAP50: 75.8% 모델에 최적화)
-DEFAULT_CONFIDENCE = 0.15  # 학습 성능 기반 최적 신뢰도 (Precision 74.9% 고려)
-DEFAULT_IOU_THRESHOLD = 0.45  # 표준 YOLO IoU 임계값
+# YOLO 기본 파라미터 (중복 탐지 방지 최적화)
+DEFAULT_CONFIDENCE = 0.35  # 높은 신뢰도로 중복 탐지 방지 (0.15→0.35)
+DEFAULT_IOU_THRESHOLD = 0.25  # 엄격한 IoU로 중복 제거 (0.45→0.25)
 
 # 전처리 기본 설정 (디테일 보존을 위한 1024 복원)
 DEFAULT_TILE_SIZE = 1024  # 2048 → 1024 (세밀한 탐지)
 # DEFAULT_BBOX_SIZE = 32    # ❌ 고정 크기 제거 - Multi-scale detection 지원
 
-# 🎯 Multi-Scale Detection 설정 (다양한 크기의 피해목 탐지)
-MIN_BBOX_SIZE = 10        # 최소 바운딩박스 크기 (작은 피해목)
-MAX_BBOX_SIZE = 200       # 최대 바운딩박스 크기 (큰 피해목)
-DEFAULT_BBOX_SIZES = [16, 32, 64, 128]  # 다중 스케일 앵커 크기
-
-# 🌲 소나무 전용 시각화 설정
+#  소나무 전용 시각화 설정
 VISUALIZATION_BBOX_COLOR = (0, 255, 0)          # 기본 녹색
 VISUALIZATION_BBOX_THICKNESS = 2                # 얇은 선 두께
 VISUALIZATION_FONT_SCALE = 0.5                  # 작은 폰트 크기
 VISUALIZATION_FONT_THICKNESS = 1                # 얇은 폰트
 VISUALIZATION_TEXT_COLOR = (255, 255, 255)      # 흰색 텍스트
 
-# 🎯 소나무 전용 탐지 임계값 (Multi-scale 최적화)
-DEFAULT_CONFIDENCE_THRESHOLD = 0.15             # 향상된 신뢰도 (오탐지 감소)
-DEFAULT_IOU_THRESHOLD = 0.45                    # 적절한 IoU (중복 제거)
-PINE_DETECTION_MIN_CONFIDENCE = 0.05            # 최소 신뢰도 (균형)
-PINE_DETECTION_MAX_DETECTIONS = 200             # 증가된 최대 탐지 수
-
-# � Multi-Scale Detection 파라미터
-MULTISCALE_INFERENCE = True                     # 다중 스케일 추론 활성화
-SCALE_FACTORS = [0.8, 1.0, 1.2, 1.5]          # 다양한 스케일로 추론
-NMS_IOU_THRESHOLD = 0.3                         # Non-Maximum Suppression IoU
-CONFIDENCE_SCALE_ADJUSTMENT = True              # 크기별 신뢰도 조정
-
-# �🌲 바운딩 박스 크기 조정 (제거된 고정값 대신 동적 조정)
-BBOX_SCALE_FACTOR = 0.9                         # 10% 축소 (더 정확한 크기)
-DYNAMIC_BBOX_SIZING = True                      # 동적 바운딩박스 크기 조정
+# 🎯 YOLOv11s 내장 FPN 사용 (단순화된 설정)
 DEFAULT_CLASS_ID = 0
 
 # 시각화 기본 설정

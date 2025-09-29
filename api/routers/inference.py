@@ -640,36 +640,9 @@ async def detect_damaged_trees(
                     image_name = os.path.basename(image_path)
                     print(f"🔍 처리 중 ({idx}/{len(image_files)}): {image_name}")
                     
-                    # 🎯 Multi-Scale Detection 추론
-                    if config.MULTISCALE_INFERENCE:
-                        print(f"  🔍 Multi-Scale 추론 시작: conf={confidence}, iou={iou_threshold}")
-                        
-                        # 다양한 스케일로 추론 수행
-                        all_scale_results = []
-                        
-                        for scale_idx, scale in enumerate(config.SCALE_FACTORS):
-                            print(f"    📏 Scale {scale_idx+1}/{len(config.SCALE_FACTORS)}: {scale}x")
-                            
-                            # 스케일별 추론 (이미지 크기는 자동으로 조정됨)
-                            scale_results = model(
-                                image_path, 
-                                conf=confidence * (1.0 if scale == 1.0 else 0.8),  # 스케일별 신뢰도 조정
-                                iou=iou_threshold,
-                                imgsz=int(640 * scale)  # 입력 이미지 크기 조정
-                            )
-                            all_scale_results.extend(scale_results)
-                        
-                        # Multi-scale 결과 통합 (NMS 적용)
-                        if all_scale_results:
-                            results = all_scale_results  # 일단 첫 번째 스케일 결과 사용
-                            print(f"  ✅ Multi-Scale 완료: {len(all_scale_results)}개 스케일")
-                        else:
-                            print(f"  ⚠️ Multi-Scale 결과 없음")
-                            results = []
-                    else:
-                        # 기본 단일 스케일 추론
-                        print(f"  🎯 단일 스케일 추론: conf={confidence}, iou={iou_threshold}")
-                        results = model(image_path, conf=confidence, iou=iou_threshold)
+                    # 🎯 YOLOv11s 내장 FPN 사용한 단일 추론
+                    print(f"  � YOLOv11s FPN 추론: conf={confidence}, iou={iou_threshold}")
+                    results = model(image_path, conf=confidence, iou=iou_threshold)
                     
                     # TFW 정보 추출 (TM 좌표 변환용)
                     tfw_params = None
@@ -680,6 +653,8 @@ async def detect_damaged_trees(
                             tfw_file_path = image_path.replace('.tif', '.tfw').replace('.tiff', '.tfw')
                             if os.path.exists(tfw_file_path):
                                 tfw_params = load_tfw_file(tfw_file_path)
+                    
+                    # YOLOv11s 내장 NMS만 사용 (추가 NMS 불필요)
                     
                     # 결과 처리 (디버깅 정보 추가)
                     image_results = []
