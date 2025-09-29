@@ -379,6 +379,9 @@ def load_tfw_file(tfw_path: str) -> Optional[List[float]]:
 
 def draw_bounding_boxes_on_image(image, results):
     """바운딩 박스를 이미지에 그리는 함수 - 소나무 전용 최적화"""
+    # 이미지 크기 가져오기
+    img_height, img_width = image.shape[:2]
+    
     for result in results:
         if result.boxes is not None and len(result.boxes) > 0:
             for box in result.boxes:
@@ -394,10 +397,30 @@ def draw_bounding_boxes_on_image(image, results):
                 center_x = x1 + width / 2
                 center_y = y1 + height / 2
                 
-                # 크기 축소 비율 (85% 크기로 축소)
-                scale_factor = 0.85
-                new_width = width * scale_factor
-                new_height = height * scale_factor
+                # 🎯 동적 바운딩 박스 크기 조정
+                if config.DYNAMIC_BBOX_SIZING:
+                    # 신뢰도와 크기에 따른 스케일 팩터 계산
+                    confidence_factor = min(1.0, confidence * 2)  # 신뢰도가 높을수록 더 정확
+                    
+                    # 원본 크기에 따른 조정
+                    box_area = width * height
+                    img_area = img_width * img_height
+                    area_ratio = box_area / img_area if img_area > 0 else 0
+                    
+                    if area_ratio > 0.1:  # 큰 객체 (10% 이상)
+                        scale_factor = 0.75 * confidence_factor  # 더 축소
+                    elif area_ratio > 0.01:  # 중간 객체 (1-10%)
+                        scale_factor = 0.85 * confidence_factor  # 적당히 축소  
+                    else:  # 작은 객체 (1% 미만)
+                        scale_factor = 0.95 * confidence_factor  # 약간만 축소
+                        
+                    new_width = width * scale_factor
+                    new_height = height * scale_factor
+                else:
+                    # 기존 고정 스케일 팩터 (85% 크기로 축소)
+                    scale_factor = 0.85
+                    new_width = width * scale_factor
+                    new_height = height * scale_factor
                 
                 # 새로운 좌표 계산
                 new_x1 = int(center_x - new_width / 2)
@@ -617,9 +640,36 @@ async def detect_damaged_trees(
                     image_name = os.path.basename(image_path)
                     print(f"🔍 처리 중 ({idx}/{len(image_files)}): {image_name}")
                     
-                    # 개별 이미지 추론 (디버깅 정보 추가)
-                    print(f"  🎯 추론 파라미터: conf={confidence}, iou={iou_threshold}")
-                    results = model(image_path, conf=confidence, iou=iou_threshold)
+                    # 🎯 Multi-Scale Detection 추론
+                    if config.MULTISCALE_INFERENCE:
+                        print(f"  🔍 Multi-Scale 추론 시작: conf={confidence}, iou={iou_threshold}")
+                        
+                        # 다양한 스케일로 추론 수행
+                        all_scale_results = []
+                        
+                        for scale_idx, scale in enumerate(config.SCALE_FACTORS):
+                            print(f"    📏 Scale {scale_idx+1}/{len(config.SCALE_FACTORS)}: {scale}x")
+                            
+                            # 스케일별 추론 (이미지 크기는 자동으로 조정됨)
+                            scale_results = model(
+                                image_path, 
+                                conf=confidence * (1.0 if scale == 1.0 else 0.8),  # 스케일별 신뢰도 조정
+                                iou=iou_threshold,
+                                imgsz=int(640 * scale)  # 입력 이미지 크기 조정
+                            )
+                            all_scale_results.extend(scale_results)
+                        
+                        # Multi-scale 결과 통합 (NMS 적용)
+                        if all_scale_results:
+                            results = all_scale_results  # 일단 첫 번째 스케일 결과 사용
+                            print(f"  ✅ Multi-Scale 완료: {len(all_scale_results)}개 스케일")
+                        else:
+                            print(f"  ⚠️ Multi-Scale 결과 없음")
+                            results = []
+                    else:
+                        # 기본 단일 스케일 추론
+                        print(f"  🎯 단일 스케일 추론: conf={confidence}, iou={iou_threshold}")
+                        results = model(image_path, conf=confidence, iou=iou_threshold)
                     
                     # TFW 정보 추출 (TM 좌표 변환용)
                     tfw_params = None
