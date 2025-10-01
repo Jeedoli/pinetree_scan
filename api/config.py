@@ -21,40 +21,36 @@ API_VISUALIZATION_DIR = API_OUTPUT_BASE / "visualizations"
 DEFAULT_MODEL_PATH = MODELS_DIR / "colab_yolo" / "best.pt"
 # FALLBACK_MODEL_PATH는 제거 (실제 존재하는 모델만 사용)
 
-# YOLO 기본 파라미터 (중복 탐지 방지 최적화)
-DEFAULT_CONFIDENCE = 0.35  # 높은 신뢰도로 중복 탐지 방지 (0.15→0.35)
-DEFAULT_IOU_THRESHOLD = 0.25  # 엄격한 IoU로 중복 제거 (0.45→0.25)
+# 🎯 추론(Inference) API 설정
+DEFAULT_CONFIDENCE = 0.35  # 추론 시 탐지 신뢰도 임계값 (35%)
+DEFAULT_IOU_THRESHOLD = 0.25  # 추론 시 NMS IoU 임계값 (중복 탐지 제거용)
 
-# 전처리 기본 설정 (디테일 보존을 위한 1024 복원)
-DEFAULT_TILE_SIZE = 1024  # 2048 → 1024 (세밀한 탐지)
-# DEFAULT_BBOX_SIZE = 32    # ❌ 고정 크기 제거 - Multi-scale detection 지원
+# 📦 데이터셋 생성(Preprocessing) 설정
+DEFAULT_TILE_SIZE = 1024  # 데이터셋 생성 시 타일 분할 크기 (1024px)
+DEFAULT_BBOX_SIZE = 32    # 데이터셋 라벨링 시 고정 바운딩박스 크기 (32px - 안정적인 학습)
 
-# 바운딩박스 크기 범위 설정
-MIN_BBOX_SIZE = 10   # 최소 바운딩박스 크기 (픽셀)
-MAX_BBOX_SIZE = 200  # 최대 바운딩박스 크기 (픽셀)
+# 🎨 추론 결과 시각화 설정
+VISUALIZATION_BBOX_COLOR = (0, 255, 0)          # 탐지된 바운딩박스 색상 (녹색)
+VISUALIZATION_BBOX_THICKNESS = 2                # 바운딩박스 선 두께
+VISUALIZATION_FONT_SCALE = 0.5                  # 신뢰도 텍스트 폰트 크기
+VISUALIZATION_FONT_THICKNESS = 1                # 신뢰도 텍스트 두께
+VISUALIZATION_TEXT_COLOR = (255, 255, 255)      # 신뢰도 텍스트 색상 (흰색)
 
-#  소나무 전용 시각화 설정
-VISUALIZATION_BBOX_COLOR = (0, 255, 0)          # 기본 녹색
-VISUALIZATION_BBOX_THICKNESS = 2                # 얇은 선 두께
-VISUALIZATION_FONT_SCALE = 0.5                  # 작은 폰트 크기
-VISUALIZATION_FONT_THICKNESS = 1                # 얇은 폰트
-VISUALIZATION_TEXT_COLOR = (255, 255, 255)      # 흰색 텍스트
+# 📦 데이터셋 및 추론 공통 설정
+DEFAULT_CLASS_ID = 0  # 피해목 클래스 ID
 
-# 🎯 YOLOv11s 내장 FPN 사용 (단순화된 설정)
-DEFAULT_CLASS_ID = 0
+# 🎨 추론 시각화 기본 설정 (호환성)
+DEFAULT_BOX_COLOR_BGR = (0, 0, 255)  # 기본 바운딩박스 색상 (빨간색)
+DEFAULT_BOX_THICKNESS = 2  # 기본 바운딩박스 선 두께
 
-# 시각화 기본 설정
-DEFAULT_BOX_COLOR_BGR = (0, 0, 255)  # 빨간색
-DEFAULT_BOX_THICKNESS = 2
+# 📁 파일 업로드 제한 설정
+MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2GB (데이터셋 생성용 대용량 GeoTIFF 지원)
+MAX_SINGLE_IMAGE_SIZE = 200 * 1024 * 1024  # 200MB (추론용 단일 이미지 제한)
+ALLOWED_IMAGE_EXTENSIONS = {'.tif', '.tiff', '.jpg', '.jpeg', '.png'}  # 지원되는 이미지 형식
+ALLOWED_CSV_EXTENSIONS = {'.csv'}  # 데이터셋 생성용 GPS 좌표 파일 형식
+ALLOWED_TFW_EXTENSIONS = {'.tfw'}  # 지리참조 정보 파일 형식
 
-# 파일 업로드 제한
-MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2GB (대용량 GeoTIFF 파일 지원)
-MAX_SINGLE_IMAGE_SIZE = 200 * 1024 * 1024  # 200MB (단일 이미지 추론용)
-ALLOWED_IMAGE_EXTENSIONS = {'.tif', '.tiff', '.jpg', '.jpeg', '.png'}
-ALLOWED_CSV_EXTENSIONS = {'.csv'}
-ALLOWED_TFW_EXTENSIONS = {'.tfw'}
-
-# API 서버 설정
+# 🌐 API 서버 설정
 API_HOST = "0.0.0.0"
 API_PORT = 8000
 
