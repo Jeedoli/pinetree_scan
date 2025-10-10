@@ -76,6 +76,9 @@ class IntegratedTrainingResponse(BaseModel):
     training_dataset_info: Dict
     download_url: str
     zip_filename: str
+    validation_samples_url: Optional[str] = None  # 라벨링 검증 샘플 ZIP URL
+    validation_info: Optional[Dict] = None  # 검증 정보
+    coordinate_validation: Optional[Dict] = None  # 🔍 GPS 좌표 매핑 검증 정보
 
 class InferenceTilingResponse(BaseModel):
     success: bool
@@ -94,6 +97,186 @@ DEFAULT_OUTPUT_DIR = Path(config.API_TILES_DIR)  # Path 객체로 변경
 
 # 📦 고정 크기 바운딩박스 설정 (단순화)
 DEFAULT_BBOX_SIZE = config.DEFAULT_BBOX_SIZE  # 32px
+
+# 📊 라벨링 검증을 위한 시각화 함수들
+def create_labeling_validation_samples(tiles_images_dir: Path, tiles_labels_dir: Path, 
+                                      output_dir: Path, num_samples: int = 30) -> List[str]:
+    """
+    🔍 라벨링 품질 검증을 위한 시각화 샘플 생성
+    
+    Args:
+        tiles_images_dir: 타일 이미지 디렉토리
+        tiles_labels_dir: 타일 라벨 디렉토리  
+        output_dir: 검증 샘플 출력 디렉토리
+        num_samples: 생성할 샘플 수
+    
+    Returns:
+        List[str]: 생성된 검증 샘플 파일명 리스트
+    """
+    import cv2
+    import random
+    
+    # 검증 샘플 저장 디렉토리 생성
+    validation_dir = output_dir / "validation_samples"
+    validation_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 라벨이 있는 타일들 찾기
+    image_files = list(tiles_images_dir.glob("*.tif"))
+    labeled_tiles = []
+    unlabeled_tiles = []
+    
+    for img_file in image_files:
+        label_file = tiles_labels_dir / f"{img_file.stem}.txt"
+        if label_file.exists():
+            # 라벨 파일 내용 확인
+            with open(label_file, 'r') as f:
+                content = f.read().strip()
+            if content:  # 라벨이 있는 경우
+                labeled_tiles.append((img_file, label_file))
+            else:  # 빈 라벨 파일 (negative sample)
+                unlabeled_tiles.append((img_file, label_file))
+    
+    print(f"🔍 라벨링 검증 샘플 생성: {len(labeled_tiles)}개 양성, {len(unlabeled_tiles)}개 음성 타일 발견")
+    
+    sample_files = []
+    
+    # 양성 샘플 (라벨이 있는 타일) 시각화
+    # 음성 샘플이 없으면 모든 샘플을 양성으로, 있으면 반반으로 배분
+    if len(unlabeled_tiles) == 0:
+        positive_samples = min(num_samples, len(labeled_tiles))
+    else:
+        positive_samples = min(num_samples // 2, len(labeled_tiles))
+    
+    if positive_samples > 0:
+        selected_positive = random.sample(labeled_tiles, positive_samples)
+        
+        for i, (img_file, label_file) in enumerate(selected_positive):
+            try:
+                # 이미지 로드
+                img = cv2.imread(str(img_file))
+                if img is None:
+                    continue
+                    
+                h, w = img.shape[:2]
+                
+                # 라벨 파일 읽기
+                with open(label_file, 'r') as f:
+                    lines = f.readlines()
+                
+                # 바운딩박스 그리기
+                for line in lines:
+                    parts = line.strip().split()
+                    if len(parts) >= 5:
+                        class_id, x_center, y_center, width, height = map(float, parts[:5])
+                        
+                        # YOLO 정규화 좌표를 픽셀 좌표로 변환
+                        x_center_px = int(x_center * w)
+                        y_center_px = int(y_center * h)
+                        width_px = int(width * w)
+                        height_px = int(height * h)
+                        
+                        # 바운딩박스 좌표 계산
+                        x1 = max(0, x_center_px - width_px // 2)
+                        y1 = max(0, y_center_px - height_px // 2)
+                        x2 = min(w, x_center_px + width_px // 2)
+                        y2 = min(h, y_center_px + height_px // 2)
+                        
+                        # 바운딩박스 그리기 (녹색)
+                        cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                        
+                        # 중심점 표시 (빨간 원)
+                        cv2.circle(img, (x_center_px, y_center_px), 3, (0, 0, 255), -1)
+                        
+                        # 크기 정보 표시
+                        cv2.putText(img, f"{width_px}x{height_px}", 
+                                  (x1, y1-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                
+                # 타일 정보 표시
+                cv2.putText(img, f"POSITIVE: {img_file.name}", 
+                          (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                cv2.putText(img, f"Labels: {len(lines)}", 
+                          (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+                
+                # 저장
+                sample_filename = f"validation_positive_{i+1:02d}_{img_file.stem}.jpg"
+                sample_path = validation_dir / sample_filename
+                cv2.imwrite(str(sample_path), img)
+                sample_files.append(sample_filename)
+                
+            except Exception as e:
+                print(f"⚠️ 양성 샘플 생성 실패 {img_file.name}: {e}")
+    
+    # 음성 샘플 (라벨이 없는 타일) 시각화  
+    negative_samples = min(num_samples - len(sample_files), len(unlabeled_tiles))
+    if negative_samples > 0 and unlabeled_tiles:
+        selected_negative = random.sample(unlabeled_tiles, negative_samples)
+        
+        for i, (img_file, label_file) in enumerate(selected_negative):
+            try:
+                # 이미지 로드
+                img = cv2.imread(str(img_file))
+                if img is None:
+                    continue
+                
+                # 타일 정보 표시
+                cv2.putText(img, f"NEGATIVE: {img_file.name}", 
+                          (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                cv2.putText(img, "No Labels (Background)", 
+                          (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+                
+                # 저장
+                sample_filename = f"validation_negative_{i+1:02d}_{img_file.stem}.jpg"
+                sample_path = validation_dir / sample_filename
+                cv2.imwrite(str(sample_path), img)
+                sample_files.append(sample_filename)
+                
+            except Exception as e:
+                print(f"⚠️ 음성 샘플 생성 실패 {img_file.name}: {e}")
+    
+    print(f"✅ 라벨링 검증 샘플 {len(sample_files)}개 생성 완료")
+    return sample_files
+
+def create_validation_samples_zip(output_base: Path, timestamp: str, sample_files: List[str]) -> str:
+    """검증 샘플들을 ZIP 파일로 압축"""
+    zip_filename = f"labeling_validation_samples_{timestamp}.zip"
+    zip_path = DEFAULT_OUTPUT_DIR / zip_filename
+    
+    validation_dir = output_base / "validation_samples"
+    
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        # 검증 샘플 이미지들 압축
+        for sample_file in sample_files:
+            sample_path = validation_dir / sample_file
+            if sample_path.exists():
+                zipf.write(sample_path, f"validation_samples/{sample_file}")
+        
+        # README 파일 생성 및 추가
+        readme_content = f"""# 라벨링 검증 샘플
+
+생성 시간: {datetime.datetime.now().isoformat()}
+총 샘플 수: {len(sample_files)}개
+
+## 파일 설명:
+- validation_positive_XX_*.jpg: 피해목 라벨이 있는 타일 (녹색 바운딩박스)
+- validation_negative_XX_*.jpg: 피해목이 없는 배경 타일
+
+## 검증 방법:
+1. 양성 샘플: 녹색 바운딩박스가 실제 피해목 위치와 일치하는지 확인
+2. 음성 샘플: 실제로 피해목이 없는 깨끗한 배경인지 확인
+3. 바운딩박스 크기가 적절한지 확인 (너무 크거나 작지 않은지)
+
+## 문제 발견시:
+- GPS 좌표 정확도 확인 필요
+- 바운딩박스 크기 조정 필요  
+- 데이터셋 재생성 권장
+"""
+        
+        readme_path = validation_dir / "README.txt"
+        with open(readme_path, 'w', encoding='utf-8') as f:
+            f.write(readme_content)
+        zipf.write(readme_path, "validation_samples/README.txt")
+    
+    return str(zip_path)
 
 # 헬퍼 함수들
 def load_tfw(tfw_path):
@@ -114,20 +297,30 @@ def tm_to_pixel(x, y, tfw):
 def process_tiles_and_labels(image_path, tfw_params, df, output_images, output_labels, 
                            tile_size, bbox_size, class_id, file_prefix):
     """📦 고정 크기 바운딩박스를 사용한 타일링 및 라벨 생성"""
-    return process_tiles_and_labels_simple(
+    tile_info, coordinate_tracking = process_tiles_and_labels_simple(
         image_path, tfw_params, df, output_images, output_labels, 
         tile_size, class_id, file_prefix, bbox_size
     )
+    return tile_info, coordinate_tracking
 
 def process_tiles_and_labels_simple(image_path, tfw_params, df, output_images, output_labels, 
                                    tile_size, class_id, file_prefix, bbox_size=32):
     """
-    📦 이미지 타일 분할 및 고정 크기 YOLO 라벨 생성 (단순화)
+    📦 이미지 타일 분할 및 고정 크기 YOLO 라벨 생성 (GPS 좌표 추적 포함)
     
     Args:
         bbox_size: 고정 바운딩박스 크기 (기본: 32px)
+        
+    Returns:
+        tuple: (tile_info, coordinate_tracking_info)
     """
     tile_info = []
+    
+    # 🔍 GPS 좌표 추적을 위한 변수들
+    total_coordinates = len(df)
+    processed_coordinates = set()  # 처리된 좌표 인덱스들
+    out_of_bounds_coordinates = []  # 이미지 범위 밖 좌표들
+    labels_created = 0  # 생성된 총 라벨 수
     
     with rasterio.open(image_path) as src:
         width, height = src.width, src.height
@@ -156,18 +349,29 @@ def process_tiles_and_labels_simple(image_path, tfw_params, df, output_images, o
                 lines = []
                 
                 # 🚀 성능 최적화: 타일 영역에 포함될 가능성이 있는 좌표만 필터링
-                # 전체 좌표를 픽셀로 변환 (한 번만 계산)
+                # 전체 좌표를 픽셀로 변환 (한 번만 계산) + 추적 정보 포함
                 if not hasattr(process_tiles_and_labels_simple, '_pixel_coords'):
                     print("🔄 GPS 좌표를 픽셀 좌표로 변환 중... (최초 1회)", flush=True)
                     pixel_coords = []
-                    for _, row in df.iterrows():
+                    for idx, row in df.iterrows():
                         px, py = tm_to_pixel(row["x"], row["y"], tfw_params)
-                        pixel_coords.append((px, py, row))
+                        
+                        # 이미지 범위 체크
+                        if px < 0 or py < 0 or px >= width or py >= height:
+                            out_of_bounds_coordinates.append({
+                                'index': idx,
+                                'original_coords': (row["x"], row["y"]),
+                                'pixel_coords': (px, py),
+                                'reason': 'out_of_image_bounds'
+                            })
+                        else:
+                            pixel_coords.append((px, py, row, idx))  # 인덱스 추가
+                    
                     process_tiles_and_labels_simple._pixel_coords = pixel_coords
-                    print(f"✅ {len(pixel_coords)}개 좌표 변환 완료", flush=True)
+                    print(f"✅ {len(pixel_coords)}개 좌표 변환 완료 (범위 외: {len(out_of_bounds_coordinates)}개)", flush=True)
                 
-                # 현재 타일 영역에 포함되는 좌표만 처리
-                for px, py, row in process_tiles_and_labels_simple._pixel_coords:
+                # 현재 타일 영역에 포함되는 좌표만 처리 (추적 포함)
+                for px, py, row, coord_idx in process_tiles_and_labels_simple._pixel_coords:
                     # 타일 내 상대좌표로 변환
                     rel_x = px - x0
                     rel_y = py - y0
@@ -181,6 +385,10 @@ def process_tiles_and_labels_simple(image_path, tfw_params, df, output_images, o
                         lines.append(
                             f"{class_id} {x_center:.6f} {y_center:.6f} {bw:.6f} {bh:.6f}"
                         )
+                        
+                        # 🔍 처리된 좌표 추적
+                        processed_coordinates.add(coord_idx)
+                        labels_created += 1
                 
                 # 라벨이 있는 경우에만 저장
                 labels_count = len(lines)
@@ -224,12 +432,28 @@ def process_tiles_and_labels_simple(image_path, tfw_params, df, output_images, o
                     position=(tx, ty)
                 ))
     
-    # 최종 통계 출력
+    # 🔍 GPS 좌표 추적 통계 계산
+    missing_coordinates = len(out_of_bounds_coordinates) if out_of_bounds_coordinates else 0
+    total_processed = len(processed_coordinates) if processed_coordinates else 0
+    
+    # 최종 통계 출력 (GPS 추적 포함)
     tiles_with_labels = sum(1 for t in tile_info if t.labels_count > 0)
     total_labels = sum(t.labels_count for t in tile_info)
-    print(f"✅ 타일 분할 완료: {total_tiles}개 타일 생성, {tiles_with_labels}개 라벨 타일, {total_labels}개 총 라벨", flush=True)
+    csv_total = len(process_tiles_and_labels_simple._pixel_coords) if hasattr(process_tiles_and_labels_simple, '_pixel_coords') else 0
+    success_rate = (total_processed/csv_total * 100) if csv_total > 0 else 0
     
-    return tile_info
+    print(f"✅ 타일 분할 완료: {total_tiles}개 타일 생성, {tiles_with_labels}개 라벨 타일, {total_labels}개 총 라벨", flush=True)
+    print(f"🔍 GPS 좌표 매핑: CSV {csv_total}개 → 라벨 {total_processed}개 생성 ({success_rate:.1f}%), 범위외 {missing_coordinates}개", flush=True)
+    
+    # 좌표 추적 정보 포함하여 반환
+    coordinate_tracking = {
+        "csv_total": csv_total,
+        "labels_created": total_processed,
+        "out_of_bounds": missing_coordinates,
+        "success_rate": f"{success_rate:.2f}%"
+    }
+    
+    return tile_info, coordinate_tracking
 
 @router.get("/download/{filename}")
 async def download_tiles_zip(filename: str):
@@ -464,14 +688,15 @@ async def create_dataset(
     **이 API는 다음 작업을 한번에 수행합니다:**
     1. 🖼️ GeoTIFF 이미지를 타일로 분할 (모든 영역 포함)
     2. 🏷️ GPS 좌표 기반 YOLO 라벨 자동 생성 (고정 크기)
-    3. ⚖️ Positive/Negative 샘플 균형 데이터셋 생성
-    4. 📦 Google Colab 최적화 딥러닝용 ZIP 파일 생성
-    5. 📊 Train/Validation 데이터셋 자동 분할
-    6. 📋 README 및 사용법 가이드 포함
+    3. 🔍 **라벨링 품질 검증 샘플 생성** (NEW!)
+    4. ⚖️ Positive/Negative 샘플 균형 데이터셋 생성
+    5. 📦 Google Colab 최적화 딥러닝용 ZIP 파일 생성
+    6. 📊 Train/Validation 데이터셋 자동 분할
     
     **🎯 안정적인 데이터셋 특징:**
     - ✅ **일관된 라벨링**: 모든 피해목에 동일한 크기 바운딩박스 적용
-    - ✅ **안정적인 학습**: 고정 크기로 cls_loss/box_loss 안정화
+    - ✅ **라벨링 검증**: 바운딩박스 오버레이된 샘플 이미지로 품질 확인 가능
+    - ✅ **안정적인 학습**: 고정 크기로 cls_loss/box_loss 안정화  
     - ✅ **Negative 샘플 포함**: 오탐지 방지를 위한 음성 샘플 자동 생성
     - ✅ **YOLO 호환**: YOLOv11s가 추론 시 자동으로 크기 조절
     
@@ -500,12 +725,18 @@ async def create_dataset(
     
     **💡 사용 예시:**
     ```python
-    # Google Colab에서 사용법
+    # Google Colab에서 데이터셋 사용
     !unzip -q "/content/drive/MyDrive/pinetree_training_dataset_*.zip" -d /content/dataset
     from ultralytics import YOLO
     model = YOLO('yolo11s.pt')
     results = model.train(data='/content/dataset/data.yaml', epochs=200)
     ```
+    
+    **🔍 라벨링 검증 방법:**
+    1. `validation_samples_url`에서 검증 샘플 ZIP 다운로드
+    2. 양성 샘플: 녹색 바운딩박스가 실제 피해목과 일치하는지 확인
+    3. 음성 샘플: 실제로 피해목이 없는 깨끗한 배경인지 확인
+    4. 문제 발견 시 GPS 좌표나 bbox_size 조정 후 재생성
     
     **📋 추가 매개변수:**
     - **class_names**: 클래스 이름 (쉼표로 구분, 기본: "damaged_tree")
@@ -592,7 +823,7 @@ async def create_dataset(
             print(f"🔄 Step 1: 고정 크기 ({bbox_size}px) 타일링 및 라벨 생성 시작...", flush=True)
             print(f"✅ 안정적인 학습을 위한 고정 바운딩박스: {bbox_size}px", flush=True)
             
-            tile_info = process_tiles_and_labels(
+            tile_info, coordinate_tracking = process_tiles_and_labels(
                 image_path=image_path,
                 tfw_params=tfw_params,
                 df=df,
@@ -607,6 +838,10 @@ async def create_dataset(
             tiles_with_labels = sum(1 for t in tile_info if t.labels_count > 0)
             total_labels = sum(t.labels_count for t in tile_info)
             
+            # 라벨링 품질 통계 계산
+            labels_per_tile = [t.labels_count for t in tile_info if t.labels_count > 0]
+            avg_labels_per_tile = sum(labels_per_tile) / len(labels_per_tile) if labels_per_tile else 0
+            
             preprocessing_info = {
                 "total_tiles": len(tile_info),
                 "tiles_with_labels": tiles_with_labels,
@@ -614,13 +849,40 @@ async def create_dataset(
                 "tile_size": tile_size,
                 "bbox_mode": f"Fixed {bbox_size}px (Stable)",
                 "bbox_size": bbox_size,
-                "file_prefix": file_prefix
+                "file_prefix": file_prefix,
+                "labeling_stats": {
+                    "avg_labels_per_tile": round(avg_labels_per_tile, 2),
+                    "max_labels_per_tile": max(labels_per_tile) if labels_per_tile else 0,
+                    "min_labels_per_tile": min(labels_per_tile) if labels_per_tile else 0,
+                    "coverage_rate": round(tiles_with_labels / len(tile_info) * 100, 1)
+                }
             }
             
             print(f"✅ Step 1 완료: {len(tile_info)}개 타일, {tiles_with_labels}개 라벨 타일, {total_labels}개 총 라벨", flush=True)
             
-            # Step 2: 딥러닝용 데이터셋 생성
-            print("🔄 Step 2: 딥러닝용 데이터셋 생성 시작...", flush=True)
+            # Step 2: 🔍 라벨링 품질 검증 샘플 생성
+            print("🔄 Step 2: 라벨링 품질 검증 샘플 생성 시작...", flush=True)
+            
+            validation_sample_files = create_labeling_validation_samples(
+                tiles_images_dir, tiles_labels_dir, output_base, num_samples=30
+            )
+            
+            # 검증 샘플 ZIP 생성
+            validation_zip_path = None
+            validation_info = {
+                "validation_samples_count": len(validation_sample_files),
+                "positive_samples": len([f for f in validation_sample_files if "positive" in f]),
+                "negative_samples": len([f for f in validation_sample_files if "negative" in f])
+            }
+            
+            if validation_sample_files:
+                validation_zip_path = create_validation_samples_zip(output_base, timestamp, validation_sample_files)
+                print(f"✅ Step 2 완료: {len(validation_sample_files)}개 검증 샘플 생성", flush=True)
+            else:
+                print("⚠️ Step 2: 검증 샘플 생성 실패", flush=True)
+            
+            # Step 3: 딥러닝용 데이터셋 생성  
+            print("🔄 Step 3: 딥러닝용 데이터셋 생성 시작...", flush=True)
             
             # 타일 이미지와 라벨 파일 매칭 (모든 이미지 포함)
             image_files = list(tiles_images_dir.glob("*.tif"))
@@ -721,8 +983,8 @@ async def create_dataset(
             with open(dataset_dir / 'data.yaml', 'w') as f:
                 yaml.dump(data_yaml, f, default_flow_style=False, sort_keys=False)
             
-            # Step 3: ZIP 파일 생성
-            print("🔄 Step 3: ZIP 파일 생성 시작...", flush=True)
+            # Step 4: ZIP 파일 생성
+            print("🔄 Step 4: ZIP 파일 생성 시작...", flush=True)
             zip_filename = f"complete_training_dataset_{file_prefix}_{timestamp}.zip"
             zip_path = DEFAULT_OUTPUT_DIR / zip_filename
             
@@ -747,17 +1009,26 @@ async def create_dataset(
             }
             
             download_url = f"/api/v1/preprocessing/download/{zip_filename}"
+            validation_samples_url = None
+            
+            if validation_zip_path:
+                validation_samples_url = f"/api/v1/preprocessing/download/{os.path.basename(validation_zip_path)}"
             
             print(f"✅ 통합 처리 완료!", flush=True)
-            print(f"📦 ZIP 파일: {zip_filename} ({dataset_info['file_size_mb']}MB)", flush=True)
+            print(f"📦 데이터셋 ZIP: {zip_filename} ({dataset_info['file_size_mb']}MB)", flush=True)
+            if validation_samples_url:
+                print(f"🔍 검증 샘플 ZIP: {os.path.basename(validation_zip_path)}", flush=True)
             
             return IntegratedTrainingResponse(
                 success=True,
-                message=f"통합 데이터셋 생성 완료! 총 {len(matched_files)}개 파일, {total_labels}개 라벨",
+                message=f"통합 데이터셋 생성 완료! 총 {len(matched_files)}개 파일, {total_labels}개 라벨 (검증 샘플 포함) | GPS 매핑: {coordinate_tracking['labels_created']}개/{coordinate_tracking['csv_total']}개 ({coordinate_tracking['success_rate']})",
                 preprocessing_info=preprocessing_info,
                 training_dataset_info=dataset_info,
                 download_url=download_url,
-                zip_filename=zip_filename
+                zip_filename=zip_filename,
+                validation_samples_url=validation_samples_url,
+                validation_info=validation_info,
+                coordinate_validation=coordinate_tracking  # 🔍 GPS 좌표 추적 정보 추가
             )
             
     except Exception as e:
