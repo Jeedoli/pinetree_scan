@@ -659,7 +659,13 @@ def create_inference_tiles_zip(output_base: Path, timestamp: str) -> str:
         images_dir = output_base / "images"
         if images_dir.exists():
             for root, dirs, files in os.walk(images_dir):
+                # macOS 시스템 폴더 제외
+                if '__MACOSX' in root:
+                    continue
                 for file in files:
+                    # macOS 숨김 파일 및 시스템 파일 제외
+                    if file.startswith('.') or file.startswith('._'):
+                        continue
                     file_path = os.path.join(root, file)
                     archive_name = os.path.relpath(file_path, output_base)
                     zipf.write(file_path, archive_name)
@@ -989,9 +995,15 @@ async def create_dataset(
             zip_path = DEFAULT_OUTPUT_DIR / zip_filename
             
             with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                # 데이터셋 디렉토리 전체를 압축
+                # 데이터셋 디렉토리 전체를 압축 (macOS 숨김 파일 제외)
                 for root, dirs, files in os.walk(dataset_dir):
+                    # macOS 시스템 폴더 제외
+                    if '__MACOSX' in root:
+                        continue
                     for file in files:
+                        # macOS 숨김 파일 및 시스템 파일 제외
+                        if file.startswith('.') or file.startswith('._'):
+                            continue
                         file_path = os.path.join(root, file)
                         archive_name = os.path.relpath(file_path, dataset_dir)
                         zipf.write(file_path, archive_name)

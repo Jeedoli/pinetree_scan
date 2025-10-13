@@ -112,9 +112,15 @@ def create_merged_visualization(all_results: List[DetectionResult], output_base:
         all_tile_files = {}
         tile_positions = {}
         
-        # extract_dir에서 모든 타일 파일 찾기
+        # extract_dir에서 모든 타일 파일 찾기 (macOS 숨김 파일 제외)
         for root, dirs, files in os.walk(extract_dir):
+            # macOS 시스템 폴더 제외
+            if '__MACOSX' in root:
+                continue
             for file in files:
+                # macOS 숨김 파일 및 시스템 파일 제외
+                if file.startswith('.') or file.startswith('._'):
+                    continue
                 if file.lower().endswith(('.tif', '.tiff', '.jpg', '.jpeg', '.png')):
                     x, y = extract_tile_position(file)
                     if (x, y) != (0, 0) or '_0_0' in file:  # (0,0)은 실제 좌표이거나 파싱 실패
@@ -605,10 +611,16 @@ async def detect_damaged_trees(
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                 zip_ref.extractall(extract_dir)
             
-            # 이미지 파일 찾기
+            # 이미지 파일 찾기 (macOS 숨김 파일 제외)
             image_files = []
             for root, dirs, files in os.walk(extract_dir):
+                # macOS 시스템 폴더 제외
+                if '__MACOSX' in root:
+                    continue
                 for file in files:
+                    # macOS 숨김 파일 및 시스템 파일 제외
+                    if file.startswith('.') or file.startswith('._'):
+                        continue
                     if file.lower().endswith(('.jpg', '.jpeg', '.png', '.tif', '.tiff')):
                         image_files.append(os.path.join(root, file))
             
