@@ -292,24 +292,61 @@ def tm_to_pixel(x, y, tfw):
     py = (y - F) / E
     return px, py
 
-# 멀티스케일 관련 함수들 제거됨 - 단순한 고정 크기 라벨링 사용
+# 🎯 멀티스케일 바운딩박스 크기 계산 함수
+def calculate_adaptive_bbox_size(target_px, target_py, all_pixel_coords, min_size=16, max_size=128):
+    """
+    GPS 좌표 밀도와 거리 기반 적응적 바운딩박스 크기 계산
+    
+    Args:
+        target_px, target_py: 대상 픽셀 좌표
+        all_pixel_coords: 모든 픽셀 좌표 리스트 [(px, py, row, idx), ...]
+        min_size, max_size: 최소/최대 바운딩박스 크기
+    
+    Returns:
+        int: 계산된 바운딩박스 크기
+    """
+    import math
+    
+    # 주변 반경 내 좌표 개수로 밀도 계산
+    search_radius = 50  # 50픽셀 반경
+    nearby_points = 0
+    
+    for px, py, row, idx in all_pixel_coords:
+        distance = math.sqrt((target_px - px)**2 + (target_py - py)**2)
+        if distance <= search_radius:
+            nearby_points += 1
+    
+    # 밀도가 높을수록 작은 바운딩박스, 낮을수록 큰 바운딩박스
+    if nearby_points <= 1:  # 매우 낮은 밀도 (외딴 피해목)
+        bbox_size = max_size  # 128px
+    elif nearby_points <= 3:  # 낮은 밀도
+        bbox_size = int(max_size * 0.75)  # 96px
+    elif nearby_points <= 6:  # 중간 밀도
+        bbox_size = int(max_size * 0.5)  # 64px
+    elif nearby_points <= 10:  # 높은 밀도
+        bbox_size = int(max_size * 0.375)  # 48px
+    else:  # 매우 높은 밀도 (밀집된 피해목)
+        bbox_size = min_size  # 16px
+    
+    return bbox_size
 
 def process_tiles_and_labels(image_path, tfw_params, df, output_images, output_labels, 
                            tile_size, bbox_size, class_id, file_prefix):
-    """📦 고정 크기 바운딩박스를 사용한 타일링 및 라벨 생성"""
+    """📦 멀티스케일 바운딩박스를 사용한 타일링 및 라벨 생성 (적응적 크기)"""
     tile_info, coordinate_tracking = process_tiles_and_labels_simple(
         image_path, tfw_params, df, output_images, output_labels, 
-        tile_size, class_id, file_prefix, bbox_size
+        tile_size, class_id, file_prefix, use_adaptive_bbox=True
     )
     return tile_info, coordinate_tracking
 
 def process_tiles_and_labels_simple(image_path, tfw_params, df, output_images, output_labels, 
-                                   tile_size, class_id, file_prefix, bbox_size=32):
+                                   tile_size, class_id, file_prefix, bbox_size=32, use_adaptive_bbox=False):
     """
-    📦 이미지 타일 분할 및 고정 크기 YOLO 라벨 생성 (GPS 좌표 추적 포함)
+    📦 이미지 타일 분할 및 멀티스케일 YOLO 라벨 생성 (GPS 좌표 추적 포함)
     
     Args:
-        bbox_size: 고정 바운딩박스 크기 (기본: 32px)
+        bbox_size: 고정 바운딩박스 크기 (기본: 32px, use_adaptive_bbox=True시 무시됨)
+        use_adaptive_bbox: 적응적 바운딩박스 사용 여부 (기본: False)
         
     Returns:
         tuple: (tile_info, coordinate_tracking_info)
@@ -379,9 +416,16 @@ def process_tiles_and_labels_simple(image_path, tfw_params, df, output_images, o
                         x_center = rel_x / w
                         y_center = rel_y / h
                         
-                        # ✅ 안정적인 고정 크기 바운딩박스 생성
-                        bw = bbox_size / w
-                        bh = bbox_size / h
+                        # 🎯 멀티스케일 vs 고정 바운딩박스 생성
+                        if use_adaptive_bbox:
+                            # GPS 좌표 밀도 기반 적응적 바운딩박스 크기 계산
+                            adaptive_size = calculate_adaptive_bbox_size(px, py, process_tiles_and_labels_simple._pixel_coords, min_size=16, max_size=128)
+                            bw = adaptive_size / w
+                            bh = adaptive_size / h
+                        else:
+                            # 기존 고정 크기 바운딩박스
+                            bw = bbox_size / w
+                            bh = bbox_size / h
                         lines.append(
                             f"{class_id} {x_center:.6f} {y_center:.6f} {bw:.6f} {bh:.6f}"
                         )
@@ -825,9 +869,13 @@ async def create_dataset(
             
             print(f"📊 GPS 좌표 데이터: {len(df)}개 포인트", flush=True)
             
-            # Step 1: 📦 고정 크기 타일링 및 라벨 생성
-            print(f"🔄 Step 1: 고정 크기 ({bbox_size}px) 타일링 및 라벨 생성 시작...", flush=True)
-            print(f"✅ 안정적인 학습을 위한 고정 바운딩박스: {bbox_size}px", flush=True)
+            # Step 1: 📦 멀티스케일 타일링 및 라벨 생성
+            if config.USE_ADAPTIVE_BBOX:
+                print(f"🔄 Step 1: 멀티스케일 적응적 타일링 및 라벨 생성 시작...", flush=True)
+                print(f"🎯 적응적 바운딩박스: {config.ADAPTIVE_BBOX_MIN_SIZE}~{config.ADAPTIVE_BBOX_MAX_SIZE}px (밀도 기반)", flush=True)
+            else:
+                print(f"🔄 Step 1: 고정 크기 ({bbox_size}px) 타일링 및 라벨 생성 시작...", flush=True)
+                print(f"✅ 고정 바운딩박스: {bbox_size}px", flush=True)
             
             tile_info, coordinate_tracking = process_tiles_and_labels(
                 image_path=image_path,
