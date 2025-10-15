@@ -89,14 +89,21 @@ class InferenceTilingResponse(BaseModel):
     tile_info: List[InferenceTileInfo]
     download_url: Optional[str] = None
 
+class MergedDatasetResponse(BaseModel):
+    success: bool
+    message: str
+    merged_dataset_info: Dict
+    download_url: str
+    zip_filename: str
+    validation_samples_url: Optional[str] = None
+    source_datasets: List[Dict]  # 원본 ZIP들의 정보
+
 # 기본 설정
 DEFAULT_TILE_SIZE = config.DEFAULT_TILE_SIZE
-# DEFAULT_BBOX_SIZE = config.DEFAULT_BBOX_SIZE  # ❌ 제거 - Multi-Scale Detection 지원
 DEFAULT_CLASS_ID = config.DEFAULT_CLASS_ID
 DEFAULT_OUTPUT_DIR = Path(config.API_TILES_DIR)  # Path 객체로 변경
 
-# 📦 고정 크기 바운딩박스 설정 (단순화)
-DEFAULT_BBOX_SIZE = config.DEFAULT_BBOX_SIZE  # 32px
+# 📦 멀티스케일 바운딩박스 - 설정값은 config.py에서 관리
 
 # 📊 라벨링 검증을 위한 시각화 함수들
 def create_labeling_validation_samples(tiles_images_dir: Path, tiles_labels_dir: Path, 
@@ -331,7 +338,7 @@ def calculate_adaptive_bbox_size(target_px, target_py, all_pixel_coords, min_siz
     return bbox_size
 
 def process_tiles_and_labels(image_path, tfw_params, df, output_images, output_labels, 
-                           tile_size, bbox_size, class_id, file_prefix):
+                           tile_size, class_id, file_prefix):
     """📦 멀티스케일 바운딩박스를 사용한 타일링 및 라벨 생성 (적응적 크기)"""
     tile_info, coordinate_tracking = process_tiles_and_labels_simple(
         image_path, tfw_params, df, output_images, output_labels, 
@@ -340,18 +347,22 @@ def process_tiles_and_labels(image_path, tfw_params, df, output_images, output_l
     return tile_info, coordinate_tracking
 
 def process_tiles_and_labels_simple(image_path, tfw_params, df, output_images, output_labels, 
-                                   tile_size, class_id, file_prefix, bbox_size=32, use_adaptive_bbox=False):
+                                   tile_size, class_id, file_prefix, use_adaptive_bbox=True):
     """
     📦 이미지 타일 분할 및 멀티스케일 YOLO 라벨 생성 (GPS 좌표 추적 포함)
     
     Args:
-        bbox_size: 고정 바운딩박스 크기 (기본: 32px, use_adaptive_bbox=True시 무시됨)
-        use_adaptive_bbox: 적응적 바운딩박스 사용 여부 (기본: False)
+        use_adaptive_bbox: 적응적 바운딩박스 사용 여부 (기본: True)
         
     Returns:
         tuple: (tile_info, coordinate_tracking_info)
     """
     tile_info = []
+    
+    # 🧹 이전 지도의 캐시된 픽셀 좌표 초기화 (각 지도마다 독립적 처리)
+    if hasattr(process_tiles_and_labels_simple, '_pixel_coords'):
+        delattr(process_tiles_and_labels_simple, '_pixel_coords')
+        print("🔄 이전 지도의 픽셀 좌표 캐시 초기화", flush=True)
     
     # 🔍 GPS 좌표 추적을 위한 변수들
     total_coordinates = len(df)
@@ -416,16 +427,13 @@ def process_tiles_and_labels_simple(image_path, tfw_params, df, output_images, o
                         x_center = rel_x / w
                         y_center = rel_y / h
                         
-                        # 🎯 멀티스케일 vs 고정 바운딩박스 생성
-                        if use_adaptive_bbox:
-                            # GPS 좌표 밀도 기반 적응적 바운딩박스 크기 계산
-                            adaptive_size = calculate_adaptive_bbox_size(px, py, process_tiles_and_labels_simple._pixel_coords, min_size=16, max_size=128)
-                            bw = adaptive_size / w
-                            bh = adaptive_size / h
-                        else:
-                            # 기존 고정 크기 바운딩박스
-                            bw = bbox_size / w
-                            bh = bbox_size / h
+                        # 🎯 멀티스케일 적응적 바운딩박스 생성
+                        # GPS 좌표 밀도 기반 적응적 바운딩박스 크기 계산
+                        adaptive_size = calculate_adaptive_bbox_size(px, py, process_tiles_and_labels_simple._pixel_coords, 
+                                                                  min_size=config.ADAPTIVE_BBOX_MIN_SIZE, 
+                                                                  max_size=config.ADAPTIVE_BBOX_MAX_SIZE)
+                        bw = adaptive_size / w
+                        bh = adaptive_size / h
                         lines.append(
                             f"{class_id} {x_center:.6f} {y_center:.6f} {bw:.6f} {bh:.6f}"
                         )
@@ -546,8 +554,7 @@ async def preprocessing_status():
         "recent_tiles": recent_tiles,
         "default_settings": {
             "tile_size": DEFAULT_TILE_SIZE,
-            "bbox_size": config.DEFAULT_BBOX_SIZE,
-            "bbox_mode": "Fixed Size (Stable)",
+            "bbox_mode": f"Multiscale Adaptive {config.ADAPTIVE_BBOX_MIN_SIZE}~{config.ADAPTIVE_BBOX_MAX_SIZE}px",
             "class_id": DEFAULT_CLASS_ID
         }
     }
@@ -724,7 +731,7 @@ async def create_dataset(
     tfw_file: UploadFile = File(..., description="지리참조를 위한 TFW 파일"),
     file_prefix: str = Form(..., description="생성될 타일 파일명 접두사"),
     tile_size: int = Form(default=config.DEFAULT_TILE_SIZE, description="타일 크기 (픽셀)"),
-    bbox_size: int = Form(default=config.DEFAULT_BBOX_SIZE, description="바운딩박스 크기 (픽셀, 기본: 32px)"),
+
     class_id: int = Form(default=0, description="YOLO 클래스 ID"),
     train_split: float = Form(default=0.8, description="학습 데이터 비율 (0.0-1.0)"),
     class_names: str = Form(default="damaged_tree", description="클래스 이름 (쉼표로 구분)"),
@@ -737,18 +744,18 @@ async def create_dataset(
     
     **이 API는 다음 작업을 한번에 수행합니다:**
     1. 🖼️ GeoTIFF 이미지를 타일로 분할 (모든 영역 포함)
-    2. 🏷️ GPS 좌표 기반 YOLO 라벨 자동 생성 (고정 크기)
+    2. � GPS 좌표 기반 YOLO 라벨 자동 생성 (멀티스케일 적응적)
     3. 🔍 **라벨링 품질 검증 샘플 생성** (NEW!)
     4. ⚖️ Positive/Negative 샘플 균형 데이터셋 생성
     5. 📦 Google Colab 최적화 딥러닝용 ZIP 파일 생성
     6. 📊 Train/Validation 데이터셋 자동 분할
     
-    **🎯 안정적인 데이터셋 특징:**
-    - ✅ **일관된 라벨링**: 모든 피해목에 동일한 크기 바운딩박스 적용
+    **🎯 멀티스케일 데이터셋 특징:**
+    - ✅ **적응적 바운딩박스**: GPS 밀도 기반 16~128px 가변 크기
+    - ✅ **실제 크기 반영**: 외딴 피해목(큰 박스) vs 밀집 피해목(작은 박스)
     - ✅ **라벨링 검증**: 바운딩박스 오버레이된 샘플 이미지로 품질 확인 가능
-    - ✅ **안정적인 학습**: 고정 크기로 cls_loss/box_loss 안정화  
+    - ✅ **향상된 탐지율**: 다양한 크기의 피해목 모두 탐지 가능
     - ✅ **Negative 샘플 포함**: 오탐지 방지를 위한 음성 샘플 자동 생성
-    - ✅ **YOLO 호환**: YOLOv11s가 추론 시 자동으로 크기 조절
     
     **📋 매개변수:**
     5. 📋 README 및 사용법 가이드 포함
@@ -759,8 +766,10 @@ async def create_dataset(
     - **tfw_file**: 지리참조를 위한 TFW 파일 (.tfw)
     - **file_prefix**: 생성될 타일 파일명 접두사 (예: "A20250919")
     - **tile_size**: 타일 크기 (기본: 1024px, 세밀한 탐지 최적화)
-    - **bbox_size**: 바운딩박스 크기 (기본: 32px, 권장: 32-64px)
-      - 모든 피해목에 동일한 크기 적용 → 안정적인 학습 보장
+    - **멀티스케일 바운딩박스**: GPS 밀도 기반 자동 크기 조절
+      - 외딴 피해목: 128px (큰 바운딩박스)
+      - 밀집 지역: 16px (작은 바운딩박스) 
+      - 중간 밀도: 48~96px (적응적 조절)
     - **class_id**: YOLO 클래스 ID (기본: 0)
     - **train_split**: 학습 데이터 비율 (기본: 0.8 = 80% 학습, 20% 검증)
     - **class_names**: 클래스 이름 (쉼표로 구분, 기본: "damaged_tree")
@@ -869,24 +878,14 @@ async def create_dataset(
             
             print(f"📊 GPS 좌표 데이터: {len(df)}개 포인트", flush=True)
             
-            # Step 1: 📦 멀티스케일 타일링 및 라벨 생성
-            if config.USE_ADAPTIVE_BBOX:
-                print(f"🔄 Step 1: 멀티스케일 적응적 타일링 및 라벨 생성 시작...", flush=True)
-                print(f"🎯 적응적 바운딩박스: {config.ADAPTIVE_BBOX_MIN_SIZE}~{config.ADAPTIVE_BBOX_MAX_SIZE}px (밀도 기반)", flush=True)
-            else:
-                print(f"🔄 Step 1: 고정 크기 ({bbox_size}px) 타일링 및 라벨 생성 시작...", flush=True)
-                print(f"✅ 고정 바운딩박스: {bbox_size}px", flush=True)
+            # Step 1: 📦 멀티스케일 적응적 타일링 및 라벨 생성
+            print(f"🔄 Step 1: 멀티스케일 적응적 타일링 및 라벨 생성 시작...", flush=True)
+            print(f"🎯 적응적 바운딩박스: {config.ADAPTIVE_BBOX_MIN_SIZE}~{config.ADAPTIVE_BBOX_MAX_SIZE}px (밀도 기반)", flush=True)
             
-            tile_info, coordinate_tracking = process_tiles_and_labels(
-                image_path=image_path,
-                tfw_params=tfw_params,
-                df=df,
-                output_images=str(tiles_images_dir),
-                output_labels=str(tiles_labels_dir),
-                tile_size=tile_size,
-                bbox_size=bbox_size,
-                class_id=class_id,
-                file_prefix=file_prefix
+            # 멀티스케일 적응적 바운딩박스 처리
+            tile_info, coordinate_tracking = process_tiles_and_labels_simple(
+                image_path, tfw_params, df, str(tiles_images_dir), str(tiles_labels_dir),
+                tile_size, class_id, file_prefix, use_adaptive_bbox=True
             )
             
             tiles_with_labels = sum(1 for t in tile_info if t.labels_count > 0)
@@ -901,8 +900,7 @@ async def create_dataset(
                 "tiles_with_labels": tiles_with_labels,
                 "total_labels": total_labels,
                 "tile_size": tile_size,
-                "bbox_mode": f"Fixed {bbox_size}px (Stable)",
-                "bbox_size": bbox_size,
+                "bbox_mode": f"Multiscale Adaptive {config.ADAPTIVE_BBOX_MIN_SIZE}~{config.ADAPTIVE_BBOX_MAX_SIZE}px",
                 "file_prefix": file_prefix,
                 "labeling_stats": {
                     "avg_labels_per_tile": round(avg_labels_per_tile, 2),
@@ -1022,8 +1020,7 @@ async def create_dataset(
                     'csv_file': csv_file.filename,
                     'total_coordinates': len(df),
                     'tile_size': tile_size,
-                    'bbox_mode': f"Fixed {bbox_size}px (Stable)",
-                    'bbox_size': bbox_size
+                    'bbox_mode': f"Multiscale Adaptive {config.ADAPTIVE_BBOX_MIN_SIZE}~{config.ADAPTIVE_BBOX_MAX_SIZE}px (Density-based)"
                 },
                 'dataset_stats': {
                     'total_files': len(matched_files),
@@ -1109,3 +1106,262 @@ async def download_processed_file(filename: str):
         filename=filename,
         media_type='application/octet-stream'
     )
+
+# 🔗 다중 데이터셋 통합을 위한 헬퍼 함수들
+def analyze_dataset_structure(extract_dir: Path, zip_filename: str) -> Dict:
+    """ZIP 파일의 데이터셋 구조를 분석"""
+    
+    # data.yaml 찾기
+    data_yaml_path = None
+    for root, dirs, files in os.walk(extract_dir):
+        if 'data.yaml' in files:
+            data_yaml_path = Path(root) / 'data.yaml'
+            break
+    
+    dataset_info = {
+        "zip_filename": zip_filename,
+        "has_data_yaml": data_yaml_path is not None,
+        "train_path": None,
+        "val_path": None,
+        "images_count": {"train": 0, "val": 0},
+        "labels_count": {"train": 0, "val": 0}
+    }
+    
+    if data_yaml_path:
+        try:
+            with open(data_yaml_path, 'r', encoding='utf-8') as f:
+                data_yaml = yaml.safe_load(f)
+                dataset_info["classes"] = data_yaml.get("names", ["damaged_tree"])
+                dataset_info["nc"] = data_yaml.get("nc", 1)
+        except:
+            dataset_info["classes"] = ["damaged_tree"]
+            dataset_info["nc"] = 1
+    
+    # train/val 폴더 찾기
+    base_dir = data_yaml_path.parent if data_yaml_path else extract_dir
+    
+    for split in ["train", "val"]:
+        images_dir = base_dir / split / "images"
+        labels_dir = base_dir / split / "labels"
+        
+        if images_dir.exists():
+            dataset_info[f"{split}_path"] = images_dir.parent
+            dataset_info["images_count"][split] = len(list(images_dir.glob("*.tif")) + list(images_dir.glob("*.jpg")) + list(images_dir.glob("*.png")))
+            if labels_dir.exists():
+                dataset_info["labels_count"][split] = len(list(labels_dir.glob("*.txt")))
+    
+    return dataset_info
+
+def collect_dataset_files(extract_dir: Path, dataset_info: Dict, source_id: int) -> tuple:
+    """데이터셋에서 파일들을 수집하고 소스 정보 추가"""
+    
+    train_files = []
+    val_files = []
+    
+    for split, file_list in [("train", train_files), ("val", val_files)]:
+        split_path = dataset_info.get(f"{split}_path")
+        if not split_path:
+            continue
+            
+        images_dir = Path(split_path) / "images"
+        labels_dir = Path(split_path) / "labels"
+        
+        if images_dir.exists():
+            for img_file in images_dir.glob("*"):
+                if img_file.suffix.lower() in ['.tif', '.tiff', '.jpg', '.jpeg', '.png']:
+                    label_file = labels_dir / f"{img_file.stem}.txt"
+                    
+                    # 라벨 파일이 없으면 빈 라벨 파일로 처리
+                    if not label_file.exists():
+                        label_file = None
+                    
+                    file_list.append({
+                        "image_path": img_file,
+                        "label_path": label_file,
+                        "source_id": source_id,
+                        "source_zip": dataset_info["zip_filename"],
+                        "original_split": split
+                    })
+    
+    return train_files, val_files
+
+def create_merged_dataset(all_train_files: List, all_val_files: List, temp_path: Path, 
+                         merged_dataset_name: str, train_split: float, shuffle_data: bool,
+                         class_names: str, timestamp: str) -> Dict:
+    """통합 데이터셋 생성"""
+    
+    # 모든 파일을 하나로 합치기
+    all_files = all_train_files + all_val_files
+    
+    if shuffle_data:
+        import random
+        random.shuffle(all_files)
+    
+    # 새로운 train/val 분할
+    split_idx = int(len(all_files) * train_split)
+    new_train_files = all_files[:split_idx]
+    new_val_files = all_files[split_idx:]
+    
+    # 통합 데이터셋 디렉토리 생성
+    dataset_dir = temp_path / "merged_dataset"
+    for split in ["train", "val"]:
+        (dataset_dir / split / "images").mkdir(parents=True, exist_ok=True)
+        (dataset_dir / split / "labels").mkdir(parents=True, exist_ok=True)
+    
+    # 파일 복사 및 중복명 처리
+    copied_files = {"train": 0, "val": 0}
+    filename_counter = {}  # 중복 파일명 카운터
+    
+    for split, files in [("train", new_train_files), ("val", new_val_files)]:
+        for file_info in files:
+            # 고유한 파일명 생성
+            orig_name = file_info["image_path"].stem
+            if orig_name in filename_counter:
+                filename_counter[orig_name] += 1
+                unique_name = f"{orig_name}_{filename_counter[orig_name]:03d}"
+            else:
+                filename_counter[orig_name] = 0
+                unique_name = orig_name
+            
+            # 이미지 파일 복사
+            src_img = file_info["image_path"]
+            dst_img = dataset_dir / split / "images" / f"{unique_name}{src_img.suffix}"
+            shutil.copy2(src_img, dst_img)
+            
+            # 라벨 파일 복사 (없으면 빈 파일 생성)
+            dst_label = dataset_dir / split / "labels" / f"{unique_name}.txt"
+            if file_info["label_path"] and file_info["label_path"].exists():
+                shutil.copy2(file_info["label_path"], dst_label)
+            else:
+                # 빈 라벨 파일 생성
+                with open(dst_label, 'w') as f:
+                    pass
+            
+            copied_files[split] += 1
+    
+    # data.yaml 생성
+    class_list = [name.strip() for name in class_names.split(',')]
+    data_yaml = {
+        'path': '.',
+        'train': 'train/images',
+        'val': 'val/images',
+        'nc': len(class_list),
+        'names': class_list,
+        
+        # 통합 메타데이터
+        'created_date': datetime.datetime.now().isoformat(),
+        'merge_info': {
+            'source_datasets': len(set(f["source_zip"] for f in all_files)),
+            'total_source_files': len(all_files),
+            'train_split_ratio': train_split,
+            'shuffled': shuffle_data
+        },
+        'dataset_stats': {
+            'total_files': len(all_files),
+            'train_files': copied_files["train"],
+            'val_files': copied_files["val"]
+        }
+    }
+    
+    with open(dataset_dir / 'data.yaml', 'w', encoding='utf-8') as f:
+        yaml.dump(data_yaml, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+    
+    # ZIP 파일 생성
+    zip_filename = f"merged_dataset_{merged_dataset_name}_{timestamp}.zip"
+    zip_path = DEFAULT_OUTPUT_DIR / zip_filename
+    
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        for root, dirs, files in os.walk(dataset_dir):
+            # macOS 시스템 파일 제외
+            if '__MACOSX' in root:
+                continue
+            for file in files:
+                if file.startswith('.') or file.startswith('._'):
+                    continue
+                file_path = os.path.join(root, file)
+                archive_name = os.path.relpath(file_path, dataset_dir)
+                zipf.write(file_path, archive_name)
+    
+    return {
+        "zip_filename": zip_filename,
+        "total_files": len(all_files),
+        "train_files": copied_files["train"],
+        "val_files": copied_files["val"],
+        "classes": class_list,
+        "file_size_mb": round(zip_path.stat().st_size / (1024 * 1024), 2),
+        "duplicate_names_resolved": sum(1 for count in filename_counter.values() if count > 0)
+    }
+
+@router.post("/merge-datasets", response_model=MergedDatasetResponse)
+async def merge_multiple_datasets(
+    dataset_zips: List[UploadFile] = File(..., description="통합할 데이터셋 ZIP 파일들 (여러 개)"),
+    merged_dataset_name: str = Form(default="merged_dataset", description="통합 데이터셋 이름"),
+    train_split: float = Form(default=0.8, description="학습/검증 데이터 분할 비율 (0.0-1.0)"),
+    shuffle_data: bool = Form(default=True, description="데이터 셔플 여부"),
+    class_names: str = Form(default="damaged_tree", description="클래스 이름들 (쉼표로 구분)")
+):
+    """
+    🔗 여러 데이터셋 ZIP 파일을 통합하여 하나의 대용량 학습 데이터셋 생성
+    
+    - 각 ZIP의 train/val 데이터를 모두 통합
+    - 파일명 중복 자동 해결 (번호 추가)
+    - 새로운 train/val 분할 적용
+    - 통합 data.yaml 생성
+    """
+    
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    try:
+        # 임시 작업 디렉토리 생성
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            
+            print(f"🔗 다중 데이터셋 통합 시작: {len(dataset_zips)}개 ZIP 파일", flush=True)
+            
+            # Step 1: 각 ZIP 파일 압축 해제 및 분석
+            source_datasets = []
+            all_train_files = []  # (image_path, label_path, source_info)
+            all_val_files = []
+            
+            for i, zip_file in enumerate(dataset_zips):
+                print(f"🔄 ZIP {i+1}/{len(dataset_zips)} 처리 중: {zip_file.filename}", flush=True)
+                
+                # ZIP 파일 저장
+                zip_path = temp_path / f"dataset_{i}_{zip_file.filename}"
+                with open(zip_path, "wb") as f:
+                    shutil.copyfileobj(zip_file.file, f)
+                
+                # ZIP 압축 해제
+                extract_dir = temp_path / f"extracted_{i}"
+                with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                    zip_ref.extractall(extract_dir)
+                
+                # 데이터셋 구조 분석
+                dataset_info = analyze_dataset_structure(extract_dir, zip_file.filename)
+                source_datasets.append(dataset_info)
+                
+                # 파일 수집
+                train_files, val_files = collect_dataset_files(extract_dir, dataset_info, i)
+                all_train_files.extend(train_files)
+                all_val_files.extend(val_files)
+            
+            print(f"📊 수집 완료: 학습 {len(all_train_files)}개, 검증 {len(all_val_files)}개 파일", flush=True)
+            
+            # Step 2: 통합 데이터셋 생성
+            merged_info = create_merged_dataset(
+                all_train_files, all_val_files, temp_path, merged_dataset_name, 
+                train_split, shuffle_data, class_names, timestamp
+            )
+            
+            return MergedDatasetResponse(
+                success=True,
+                message=f"데이터셋 통합 완료! {len(dataset_zips)}개 ZIP → 통합 데이터셋 생성",
+                merged_dataset_info=merged_info,
+                download_url=f"/api/v1/preprocessing/download/{merged_info['zip_filename']}",
+                zip_filename=merged_info['zip_filename'],
+                source_datasets=source_datasets
+            )
+            
+    except Exception as e:
+        print(f"❌ 데이터셋 통합 오류: {str(e)}", flush=True)
+        raise HTTPException(status_code=500, detail=f"데이터셋 통합 중 오류 발생: {str(e)}")
