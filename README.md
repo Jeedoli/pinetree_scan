@@ -315,10 +315,10 @@ forest_01.jpg,1245.2,678.9,0.92,127.123456,37.654321
 forest_01.jpg,2145.8,1023.1,0.87,127.134567,37.645432
 ```
 
-### 📊 시각화 결과
-탐지된 피해목에 바운딩박스가 표시된 이미지가 자동 생성됩니다.
+### 📊 추론 시각화 결과 및 conf 임계값 최적화 부분
 
-<img width="512" alt="탐지 결과 예시" src="https://github.com/user-attachments/assets/1507422b-e1ad-4811-ab2f-41350473894d" />
+<img width="512" alt="추론 시각화 예시" src="https://github.com/user-attachments/assets/3370d830-3b66-4d91-8965-6897b85fa86a" />
+<img width="512" alt="딥러닝 신뢰도 임계값" src="https://github.com/user-attachments/assets/3aeb8c9f-5da6-4f6d-81a2-9a2a409fd3a2" />
 
 ---
 
