@@ -80,8 +80,8 @@ wget "http://localhost:8000/api/v1/preprocessing/download/inference_tiles_202501
 curl -X POST "http://localhost:8000/api/v1/inference/detect-all" \
   -F "images_zip=@inference_tiles_20250115_123456.zip" \
   -F "model_path=results/pinetree-damage-single-final2/weights/best.pt" \
-  -F "confidence=0.5" \
-  -F "iou_threshold=0.8" \
+  -F "confidence=0.16" \
+  -F "iou_threshold=0.45" \
   -F "save_visualization=true" \
   -F "output_tm_coordinates=true"
 ```
