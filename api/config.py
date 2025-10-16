@@ -22,8 +22,8 @@ DEFAULT_MODEL_PATH = MODELS_DIR / "colab_yolo" / "best.pt"
 # FALLBACK_MODEL_PATH는 제거 (실제 존재하는 모델만 사용)
 
 # 🎯 추론(Inference) API 설정
-DEFAULT_CONFIDENCE = 0.28  # 추론 시 탐지 신뢰도 임계값 (28%)
-DEFAULT_IOU_THRESHOLD = 0.6  # 추론 시 NMS IoU 임계값 (중복 탐지 제거용)
+DEFAULT_CONFIDENCE = 0.16  # 추론 시 탐지 신뢰도 임계값 (16%)
+DEFAULT_IOU_THRESHOLD = 0.45  # 추론 시 NMS IoU 임계값 (균형잡힌 탐지용)
 
 # 📦 데이터셋 생성(Preprocessing) 설정
 DEFAULT_TILE_SIZE = 1024  # 데이터셋 생성 시 타일 분할 크기 (1024px)
