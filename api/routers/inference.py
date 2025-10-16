@@ -542,7 +542,7 @@ async def list_available_models():
 async def detect_damaged_trees(
     images_zip: UploadFile = File(..., description="추론할 이미지들이 포함된 ZIP 파일"),
     model_path: str = Form(default=DEFAULT_WEIGHTS, description="사용할 YOLO 모델 경로"),
-    confidence: float = Form(default=config.DEFAULT_CONFIDENCE, description="탐지 신뢰도 임계값 (0.28)"),
+    confidence: float = Form(default=config.DEFAULT_CONFIDENCE, description="탐지 신뢰도 임계값 (0.16)"),
     iou_threshold: float = Form(default=config.DEFAULT_IOU_THRESHOLD, description="IoU 임계값 (중복 탐지 제거용)"),
     save_visualization: bool = Form(default=True, description="탐지 결과 시각화 이미지 저장 여부"),
     output_tm_coordinates: bool = Form(default=True, description="TM 좌표 변환 여부")
