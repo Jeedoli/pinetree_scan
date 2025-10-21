@@ -652,9 +652,17 @@ async def detect_damaged_trees(
                     image_name = os.path.basename(image_path)
                     print(f"🔍 처리 중 ({idx}/{len(image_files)}): {image_name}")
                     
-                    # 🎯 YOLOv11s 내장 FPN 사용한 단일 추론
-                    print(f"  � YOLOv11s FPN 추론: conf={confidence}, iou={iou_threshold}")
-                    results = model(image_path, conf=confidence, iou=iou_threshold)
+                    # 🎯 1단계: 기본 추론 (높은 품질)
+                    print(f"  🔍 1단계 기본 추론: conf={confidence}, iou={iou_threshold}")
+                    primary_results = model(image_path, conf=confidence, iou=iou_threshold)
+                    
+                    # 🔍 2단계: 촘촘한 지역용 추가 탐지 (낮은 IoU)
+                    print(f"  🔍 2단계 촘촘지역 추론: conf={confidence}, iou=0.2")
+                    dense_results = model(image_path, conf=confidence, iou=0.2)  # IoU만 낮춤
+                    
+                    # 🔍 3단계: 미세 탐지 (매우 낮은 신뢰도)
+                    print(f"  🔍 3단계 미세탐지 추론: conf=0.08, iou=0.2")
+                    fine_results = model(image_path, conf=0.08, iou=0.2)  # 둘 다 낮춤
                     
                     # TFW 정보 추출 (TM 좌표 변환용)
                     tfw_params = None
@@ -668,92 +676,215 @@ async def detect_damaged_trees(
                     
                     # YOLOv11s 내장 NMS만 사용 (추가 NMS 불필요)
                     
-                    # 결과 처리 (디버깅 정보 추가)
-                    image_results = []
-                    raw_detections = 0  # 원시 탐지 수
+                    # 🧩 3단계 결과 통합 및 지능형 중복 제거
+                    all_detections_raw = []
                     
-                    for result in results:
-                        boxes = result.boxes
-                        if boxes is not None:
-                            raw_detections += len(boxes)
-                            print(f"  📊 원시 탐지 수: {len(boxes)}개 (conf >= {confidence})")
-                            
-                            for i, box in enumerate(boxes):
-                                conf_value = float(box.conf[0].cpu().numpy())
-                                print(f"    탐지 {i+1}: 신뢰도 {conf_value:.4f}")
-                                # 바운딩 박스 정보 추출
+                    # 1단계 결과 수집 (높은 우선순위)
+                    stage1_count = 0
+                    for result in primary_results:
+                        if result.boxes is not None:
+                            for box in result.boxes:
                                 x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-                                center_x = (x1 + x2) / 2
-                                center_y = (y1 + y2) / 2
-                                width = x2 - x1
-                                height = y2 - y1
+                                center_x, center_y = (x1 + x2) / 2, (y1 + y2) / 2
                                 conf = float(box.conf[0].cpu().numpy())
-                                class_id = int(box.cls[0].cpu().numpy())
-                                
-                                # TM 좌표 변환
-                                tm_x, tm_y = None, None
-                                if tfw_params:
-                                    tm_x, tm_y = pixel_to_tm(center_x, center_y, tfw_params)
-                                
-                                detection = DetectionResult(
-                                    filename=image_name,
-                                    class_id=class_id,
-                                    center_x=center_x,
-                                    center_y=center_y,
-                                    width=width,
-                                    height=height,
-                                    confidence=conf,
-                                    tm_x=tm_x,
-                                    tm_y=tm_y
-                                )
-                                
-                                image_results.append(detection)
-                                all_results.append(detection)
+                                all_detections_raw.append({
+                                    'center_x': center_x, 'center_y': center_y, 'conf': conf,
+                                    'box': box, 'stage': 1, 'priority': 3
+                                })
+                                stage1_count += 1
                     
-                    # 시각화 이미지 저장
+                    # 2단계 결과 수집 (중간 우선순위)
+                    stage2_count = 0
+                    for result in dense_results:
+                        if result.boxes is not None:
+                            for box in result.boxes:
+                                x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                                center_x, center_y = (x1 + x2) / 2, (y1 + y2) / 2
+                                conf = float(box.conf[0].cpu().numpy())
+                                all_detections_raw.append({
+                                    'center_x': center_x, 'center_y': center_y, 'conf': conf,
+                                    'box': box, 'stage': 2, 'priority': 2
+                                })
+                                stage2_count += 1
+                    
+                    # 3단계 결과 수집 (낮은 우선순위)
+                    stage3_count = 0
+                    for result in fine_results:
+                        if result.boxes is not None:
+                            for box in result.boxes:
+                                x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                                center_x, center_y = (x1 + x2) / 2, (y1 + y2) / 2
+                                conf = float(box.conf[0].cpu().numpy())
+                                all_detections_raw.append({
+                                    'center_x': center_x, 'center_y': center_y, 'conf': conf,
+                                    'box': box, 'stage': 3, 'priority': 1
+                                })
+                                stage3_count += 1
+                    
+                    print(f"  📊 단계별 원시 탐지: 1단계={stage1_count}개, 2단계={stage2_count}개, 3단계={stage3_count}개")
+                    
+                    # 🎯 지능형 중복 제거 (우선순위 + 거리 기반)
+                    # 높은 우선순위(stage1) > 높은 신뢰도 > 낮은 stage 순으로 정렬
+                    all_detections_raw.sort(key=lambda x: (x['priority'], x['conf']), reverse=True)
+                    
+                    filtered_detections = []
+                    MIN_DISTANCE = 15  # 15픽셀 이내는 중복 (기존 25에서 줄임)
+                    
+                    for detection in all_detections_raw:
+                        is_duplicate = False
+                        for existing in filtered_detections:
+                            dist = ((detection['center_x'] - existing['center_x']) ** 2 + 
+                                   (detection['center_y'] - existing['center_y']) ** 2) ** 0.5
+                            if dist < MIN_DISTANCE:
+                                is_duplicate = True
+                                break
+                        
+                        if not is_duplicate:
+                            filtered_detections.append(detection)
+                    
+                    print(f"  🧹 중복 제거 후: {len(filtered_detections)}개 (거리 {MIN_DISTANCE}px 기준)")
+                    
+                    # 결과 처리 및 밀도 기반 동적 바운딩박스 크기 최적화
+                    image_results = []
+                    all_boxes = [(det['center_x'], det['center_y'], det['conf']) for det in filtered_detections]
+                        # 각 탐지에 대해 밀도 기반 크기 조정
+                    for i, detection_info in enumerate(filtered_detections):
+                        center_x = detection_info['center_x']
+                        center_y = detection_info['center_y']
+                        box = detection_info['box']
+                        stage = detection_info['stage']
+                        
+                        conf_value = detection_info['conf']
+                        print(f"    탐지 {i+1}: 신뢰도 {conf_value:.4f} (단계{stage})")
+                        
+                        # 원본 바운딩 박스 정보
+                        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                        orig_width = x2 - x1
+                        orig_height = y2 - y1
+                        
+                        # 🌲 주변 밀도 기반 동적 크기 조정
+                        SEARCH_RADIUS = 80  # 80픽셀 반경 내 밀도 확인
+                        nearby_count = 0
+                        
+                        # 현재 탐지 주변의 다른 탐지들 개수 세기
+                        for other_x, other_y, _ in all_boxes:
+                            if other_x != center_x or other_y != center_y:  # 자기 자신 제외
+                                distance = ((center_x - other_x) ** 2 + (center_y - other_y) ** 2) ** 0.5
+                                if distance <= SEARCH_RADIUS:
+                                    nearby_count += 1
+                        
+                        # 밀도에 따른 적응적 바운딩박스 크기 결정
+                        if nearby_count >= 5:  # 매우 촘촘함 (5개 이상 주변)
+                            target_size = 16
+                            density_level = "매우촘촘"
+                        elif nearby_count >= 3:  # 촘촘함 (3-4개 주변)
+                            target_size = 20
+                            density_level = "촘촘"
+                        elif nearby_count >= 1:  # 보통 (1-2개 주변)
+                            target_size = 28
+                            density_level = "보통"
+                        else:  # 외딴 (주변 없음)
+                            target_size = 32
+                            density_level = "외딴"
+                        
+                        print(f"      🎯 주변 밀도: {nearby_count}개 ({density_level}) → 크기: {target_size}px")
+                        
+                        # 원본이 너무 크면 조정, 적당하면 target_size와 비교해서 더 작은 값 사용
+                        if orig_width > target_size * 2 or orig_height > target_size * 2:
+                            new_width = target_size
+                            new_height = target_size
+                            print(f"      📏 크기 조정: {orig_width:.1f}x{orig_height:.1f} → {new_width}x{new_height}")
+                        else:
+                            # 원본이 적당한 크기면 target_size와 원본 중 더 작은 값 사용
+                            new_width = min(orig_width, target_size)
+                            new_height = min(orig_height, target_size)
+                            if new_width != orig_width or new_height != orig_height:
+                                print(f"      📏 미세 조정: {orig_width:.1f}x{orig_height:.1f} → {new_width:.1f}x{new_height:.1f}")
+                        
+                        conf = float(box.conf[0].cpu().numpy())
+                        class_id = int(box.cls[0].cpu().numpy())
+                        
+                        # TM 좌표 변환
+                        tm_x, tm_y = None, None
+                        if tfw_params:
+                            tm_x, tm_y = pixel_to_tm(center_x, center_y, tfw_params)
+                        
+                        detection = DetectionResult(
+                            filename=image_name,
+                            class_id=class_id,
+                            center_x=center_x,
+                            center_y=center_y,
+                            width=new_width,  # 밀도 기반 조정된 크기
+                            height=new_height,  # 밀도 기반 조정된 크기
+                            confidence=conf,
+                            tm_x=tm_x,
+                            tm_y=tm_y
+                        )
+                        
+                        image_results.append(detection)
+                        all_results.append(detection)
+                    
+                    processed_images.append(image_name)
+                    raw_detections = stage1_count + stage2_count + stage3_count
+                    print(f"✅ 완료: {image_name} (원시: {raw_detections}개, 최종: {len(image_results)}개 탐지)")
+                    
+                    # 시각화 이미지 저장 (동적 바운딩박스 크기 반영)
                     if save_visualization and viz_dir and image_results:
-                        viz_path = os.path.join(viz_dir, f"detected_{image_name}")
+                        viz_filename = f"{os.path.splitext(image_name)[0]}_detected_{timestamp}.jpg"
+                        viz_path = os.path.join(viz_dir, viz_filename)
                         try:
                             # 원본 이미지 로드
                             image = cv2.imread(image_path)
                             if image is not None:
-                                # 탐지 결과 그리기
+                                # 탐지 결과 그리기 (동적 크기 반영)
                                 for detection in image_results:
                                     x1 = int(detection.center_x - detection.width / 2)
                                     y1 = int(detection.center_y - detection.height / 2)
                                     x2 = int(detection.center_x + detection.width / 2)
                                     y2 = int(detection.center_y + detection.height / 2)
                                     
-                                    # 바운딩 박스 그리기
-                                    cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                                    # 신뢰도에 따른 색상 조정
+                                    if detection.confidence >= 0.7:
+                                        bbox_color = (0, 255, 0)  # 녹색 (높은 신뢰도)
+                                    elif detection.confidence >= 0.4:
+                                        bbox_color = (0, 165, 255)  # 주황색 (중간 신뢰도)
+                                    else:
+                                        bbox_color = (0, 0, 255)  # 빨간색 (낮은 신뢰도)
                                     
-                                    # 신뢰도 텍스트 추가
-                                    if detection.confidence:
-                                        text = f"{detection.confidence:.2f}"
-                                        cv2.putText(image, text, (x1, y1-10), 
-                                                  cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+                                    # 바운딩 박스 그리기 (크기에 따른 선 두께 조정)
+                                    thickness = 2 if detection.width >= 24 else 1
+                                    cv2.rectangle(image, (x1, y1), (x2, y2), bbox_color, thickness)
+                                    
+                                    # 신뢰도 텍스트 제거 (시인성 향상을 위해)
                                 
                                 # 시각화 이미지 저장
                                 cv2.imwrite(viz_path, image)
-                                # 메모리 해제
-                                del image
+                                print(f"  🖼️ 시각화 저장: {viz_filename}")
                         except Exception as e:
                             print(f"⚠️ 시각화 저장 실패 ({image_name}): {e}")
+                    elif save_visualization and viz_dir:
+                        # 탐지 결과가 없어도 원본 이미지 저장 (회색 테두리로 표시)
+                        original_img = cv2.imread(image_path)
+                        if original_img is not None:
+                            h, w = original_img.shape[:2]
+                            cv2.rectangle(original_img, (0, 0), (w-1, h-1), (128, 128, 128), 10)
+                            
+                            viz_filename = f"{os.path.splitext(image_name)[0]}_no_detection_{timestamp}.jpg"
+                            viz_path = os.path.join(viz_dir, viz_filename)
+                            cv2.imwrite(viz_path, original_img)
+                            print(f"  🖼️ 탐지없음 시각화 저장: {viz_filename}")
                     
                     # 추론 결과 메모리 해제
-                    del results
+                    del primary_results, dense_results, fine_results
                     
-                    processed_images.append(image_name)
-                    print(f"✅ 완료: {image_name} (원시: {raw_detections}개, 최종: {len(image_results)}개 탐지)")
-                    
-                    # 탐지가 없는 경우 추가 디버깅
-                    if raw_detections == 0:
-                        print(f"  ⚠️ 탐지 없음: {image_name} - 신뢰도 {confidence} 기준")
-                        # 낮은 신뢰도로 재시도
-                        debug_results = model(image_path, conf=0.01, iou=iou_threshold)
-                        debug_count = sum(len(r.boxes) if r.boxes is not None else 0 for r in debug_results)
-                        print(f"  🔍 디버그 (conf=0.01): {debug_count}개 탐지")
-                        del debug_results
+                    # 탐지가 매우 적으면 디버그 정보 출력
+                    if len(image_results) < 3:
+                        print(f"  🔍 탐지 수가 적음 - 극한 디버그")
+                        # 극한 낮은 신뢰도로 재시도
+                        extreme_results = model(image_path, conf=0.01, iou=0.1)
+                        extreme_count = sum(len(r.boxes) if r.boxes is not None else 0 for r in extreme_results)
+                        print(f"  🔍 극한 디버그 (conf=0.01, iou=0.1): {extreme_count}개 탐지")
+                        del extreme_results
                     
                 except Exception as e:
                     failed_images.append(f"{os.path.basename(image_path)}: {str(e)}")
