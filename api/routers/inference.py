@@ -260,29 +260,17 @@ def create_merged_visualization(all_results: List[DetectionResult], output_base:
                         y2 = max(0, min(y2, total_height))
                         
                         if x2 > x1 and y2 > y1:  # 유효한 바운딩 박스만 그리기
-                            # 바운딩 박스 그리기 (두꺼운 초록색)
-                            cv2.rectangle(merged_image, (x1, y1), (x2, y2), (0, 255, 0), 3)
+                            # 🎨 신뢰도에 따른 색상 코딩 (신뢰도 텍스트 제거)
+                            confidence = detection.confidence if detection.confidence else 0.5
+                            if confidence >= 0.7:
+                                color = (0, 255, 0)      # 초록색: 높은 신뢰도 (70%+)
+                            elif confidence >= 0.4:
+                                color = (0, 165, 255)    # 주황색: 중간 신뢰도 (40-70%)
+                            else:
+                                color = (0, 0, 255)      # 빨간색: 낮은 신뢰도 (40% 미만)
                             
-                            # 신뢰도 텍스트 추가
-                            if detection.confidence:
-                                text = f"{detection.confidence:.3f}"
-                                # 텍스트 배경 추가 (가독성 향상)
-                                font_scale = 0.6
-                                font_thickness = 2
-                                text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thickness)[0]
-                                
-                                # 텍스트 위치 조정 (바운딩 박스 위쪽)
-                                text_y = max(y1 - 5, text_size[1] + 5)
-                                bg_y1 = text_y - text_size[1] - 5
-                                bg_y2 = text_y + 5
-                                bg_x1 = x1
-                                bg_x2 = min(x1 + text_size[0] + 10, total_width)
-                                
-                                # 배경 그리기
-                                cv2.rectangle(merged_image, (bg_x1, bg_y1), (bg_x2, bg_y2), (0, 255, 0), -1)
-                                # 텍스트 그리기
-                                cv2.putText(merged_image, text, (x1 + 5, text_y), 
-                                          cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), font_thickness)
+                            # 바운딩 박스 그리기 (신뢰도별 색상)
+                            cv2.rectangle(merged_image, (x1, y1), (x2, y2), color, 3)
                             
                             detection_count += 1
                 
@@ -396,43 +384,12 @@ def draw_bounding_boxes_on_image(image, results):
                 confidence = box.conf[0].cpu().numpy()
                 class_id = int(box.cls[0].cpu().numpy())
                 
-                # 🌲 소나무 피해목 전용 바운딩 박스 크기 최적화
-                # 바운딩 박스를 15% 축소하여 더 정확한 영역만 표시
-                width = x2 - x1
-                height = y2 - y1
-                center_x = x1 + width / 2
-                center_y = y1 + height / 2
-                
-                # 🎯 동적 바운딩 박스 크기 조정
-                if config.DYNAMIC_BBOX_SIZING:
-                    # 신뢰도와 크기에 따른 스케일 팩터 계산
-                    confidence_factor = min(1.0, confidence * 2)  # 신뢰도가 높을수록 더 정확
-                    
-                    # 원본 크기에 따른 조정
-                    box_area = width * height
-                    img_area = img_width * img_height
-                    area_ratio = box_area / img_area if img_area > 0 else 0
-                    
-                    if area_ratio > 0.1:  # 큰 객체 (10% 이상)
-                        scale_factor = 0.75 * confidence_factor  # 더 축소
-                    elif area_ratio > 0.01:  # 중간 객체 (1-10%)
-                        scale_factor = 0.85 * confidence_factor  # 적당히 축소  
-                    else:  # 작은 객체 (1% 미만)
-                        scale_factor = 0.95 * confidence_factor  # 약간만 축소
-                        
-                    new_width = width * scale_factor
-                    new_height = height * scale_factor
-                else:
-                    # 기존 고정 스케일 팩터 (85% 크기로 축소)
-                    scale_factor = 0.85
-                    new_width = width * scale_factor
-                    new_height = height * scale_factor
-                
-                # 새로운 좌표 계산
-                new_x1 = int(center_x - new_width / 2)
-                new_y1 = int(center_y - new_height / 2)
-                new_x2 = int(center_x + new_width / 2)
-                new_y2 = int(center_y + new_height / 2)
+                # � YOLO 원본 예측 좌표 사용 (정확한 위치 표시)
+                # 바운딩 박스 크기 조정 없이 모델이 예측한 정확한 위치 그대로 사용
+                new_x1 = int(x1)
+                new_y1 = int(y1)
+                new_x2 = int(x2)
+                new_y2 = int(y2)
                 
                 # 신뢰도에 따른 색상 조정 (낮은 신뢰도는 주황색으로)
                 if confidence >= 0.7:
@@ -446,22 +403,8 @@ def draw_bounding_boxes_on_image(image, results):
                 cv2.rectangle(image, (new_x1, new_y1), (new_x2, new_y2), 
                             bbox_color, 2)  # 두께를 2로 줄임
                 
-                # 더 작은 폰트로 레이블 표시
-                label = f"Pine Damage: {confidence:.2f}"
-                font_scale = 0.5  # 폰트 크기 축소
-                font_thickness = 1  # 폰트 두께 축소
-                label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 
-                                           font_scale, font_thickness)[0]
-                
-                # 텍스트 배경 그리기 (더 작게)
-                cv2.rectangle(image, (new_x1, new_y1 - label_size[1] - 5), 
-                            (new_x1 + label_size[0], new_y1), 
-                            bbox_color, -1)
-                
-                # 텍스트 그리기 (더 작게)
-                cv2.putText(image, label, (new_x1, new_y1 - 3), 
-                          cv2.FONT_HERSHEY_SIMPLEX, font_scale, 
-                          (255, 255, 255), font_thickness)
+                # 🎨 신뢰도 텍스트 제거 (깔끔한 시각화를 위해)
+                # 색상만으로 신뢰도를 표현: 초록(높음) → 주황(중간) → 빨강(낮음)
 
 @router.get("/download/{filename}")
 async def download_csv_result(filename: str):
@@ -652,17 +595,25 @@ async def detect_damaged_trees(
                     image_name = os.path.basename(image_path)
                     print(f"🔍 처리 중 ({idx}/{len(image_files)}): {image_name}")
                     
-                    # 🎯 1단계: 기본 추론 (높은 품질)
-                    print(f"  🔍 1단계 기본 추론: conf={confidence}, iou={iou_threshold}")
-                    primary_results = model(image_path, conf=confidence, iou=iou_threshold)
+                    # 🎯 촘촘한 피해목 특화 최적화된 3단계 추론
+                    print(f"  🔍 촘촘한 피해목 특화 추론 시작...")
                     
-                    # 🔍 2단계: 촘촘한 지역용 추가 탐지 (낮은 IoU)
-                    print(f"  🔍 2단계 촘촘지역 추론: conf={confidence}, iou=0.2")
-                    dense_results = model(image_path, conf=confidence, iou=0.2)  # IoU만 낮춤
+                    # 1단계: 표준 탐지 (일반적인 피해목)
+                    print(f"    📊 640px 표준: conf=0.15, iou=0.35")
+                    results_640 = model(image_path, imgsz=640, conf=0.15, iou=0.35)
                     
-                    # 🔍 3단계: 미세 탐지 (매우 낮은 신뢰도)
-                    print(f"  🔍 3단계 미세탐지 추론: conf=0.08, iou=0.2")
-                    fine_results = model(image_path, conf=0.08, iou=0.2)  # 둘 다 낮춤
+                    # 2단계: 고해상도 중밀도 (작은 피해목)
+                    print(f"    📊 832px 고해상도: conf=0.13, iou=0.2")  
+                    results_832 = model(image_path, imgsz=832, conf=0.13, iou=0.2)
+                    
+                    # 3단계: 초고해상도 초밀집 (촘촘한 피해목 전용) ⭐ 더욱 강화!
+                    print(f"    📊 1024px 초밀집: conf=0.10, iou=0.05 (극한 밀집)")
+                    results_1024 = model(image_path, imgsz=1024, conf=0.10, iou=0.05)
+                    
+                    # 기존 변수명 호환성 유지 (결과 통합)
+                    primary_results = results_640
+                    dense_results = results_832  
+                    fine_results = results_1024  # 촘촘한 지역용
                     
                     # TFW 정보 추출 (TM 좌표 변환용)
                     tfw_params = None
@@ -773,33 +724,63 @@ async def detect_damaged_trees(
                                 if distance <= SEARCH_RADIUS:
                                     nearby_count += 1
                         
-                        # 밀도에 따른 적응적 바운딩박스 크기 결정
-                        if nearby_count >= 5:  # 매우 촘촘함 (5개 이상 주변)
-                            target_size = 16
+                        # 🎯 실용적 접근: YOLO 예측 크기 그대로 사용 (시각화만 개선)
+                        # 실제 탐지 성능은 멀티스케일 해상도가 담당
+                        
+                        # 밀도 레벨 계산 (시각화용)
+                        if nearby_count >= 5:
                             density_level = "매우촘촘"
-                        elif nearby_count >= 3:  # 촘촘함 (3-4개 주변)
-                            target_size = 20
+                        elif nearby_count >= 3:
                             density_level = "촘촘"
-                        elif nearby_count >= 1:  # 보통 (1-2개 주변)
-                            target_size = 28
+                        elif nearby_count >= 1:
                             density_level = "보통"
-                        else:  # 외딴 (주변 없음)
-                            target_size = 32
+                        else:
                             density_level = "외딴"
                         
-                        print(f"      🎯 주변 밀도: {nearby_count}개 ({density_level}) → 크기: {target_size}px")
+                        print(f"      🎯 주변 밀도: {nearby_count}개 → 밀도 레벨: {density_level}")
+                        print(f"      📏 YOLO 예측 크기: {orig_width:.1f}x{orig_height:.1f}px")
                         
-                        # 원본이 너무 크면 조정, 적당하면 target_size와 비교해서 더 작은 값 사용
-                        if orig_width > target_size * 2 or orig_height > target_size * 2:
-                            new_width = target_size
-                            new_height = target_size
-                            print(f"      📏 크기 조정: {orig_width:.1f}x{orig_height:.1f} → {new_width}x{new_height}")
+                        # 🌲 소나무 피해목 실용적 크기: 밀도 기반 적응적 제한
+                        if density_level == "많이 밀집된 곳":
+                            MAX_SIZE = 20   # 촘촘한 지역은 작게
+                            TARGET_SIZE = 16
+                        elif density_level == "적당히 밀집된 곳":
+                            MAX_SIZE = 30   # 적당히 작게
+                            TARGET_SIZE = 22
+                        elif density_level == "보통":
+                            MAX_SIZE = 40   # 보통 크기
+                            TARGET_SIZE = 28
+                        else:  # 외딴
+                            MAX_SIZE = 50   # 외딴 지역은 크게 (명확 표시)
+                            TARGET_SIZE = 35
+                            
+                        MIN_SIZE = 8    # 최소 크기 보장
+                        
+                        # 극단적인 경우만 제한, 나머지는 YOLO 예측 그대로 사용
+                        if orig_width > MAX_SIZE or orig_height > MAX_SIZE:
+                            # 너무 큰 경우만 제한 (비율 유지하며 축소)
+                            scale_factor = min(MAX_SIZE / orig_width, MAX_SIZE / orig_height)
+                            new_width = orig_width * scale_factor
+                            new_height = orig_height * scale_factor
+                            print(f"      📐 대형목 크기 조정: {orig_width:.1f}x{orig_height:.1f} → {new_width:.1f}x{new_height:.1f}px")
+                        elif orig_width < MIN_SIZE or orig_height < MIN_SIZE:
+                            # 너무 작은 경우만 최소 크기 보장
+                            new_width = max(orig_width, MIN_SIZE)
+                            new_height = max(orig_height, MIN_SIZE)
+                            print(f"      📐 최소 크기 보장: {orig_width:.1f}x{orig_height:.1f} → {new_width:.1f}x{new_height:.1f}px")
                         else:
-                            # 원본이 적당한 크기면 target_size와 원본 중 더 작은 값 사용
-                            new_width = min(orig_width, target_size)
-                            new_height = min(orig_height, target_size)
-                            if new_width != orig_width or new_height != orig_height:
-                                print(f"      📏 미세 조정: {orig_width:.1f}x{orig_height:.1f} → {new_width:.1f}x{new_height:.1f}")
+                            # TARGET_SIZE 기준으로 적절히 조정
+                            avg_size = (orig_width + orig_height) / 2
+                            if avg_size > TARGET_SIZE * 1.2:  # 20% 이상 크면 조정
+                                scale = TARGET_SIZE / avg_size
+                                new_width = orig_width * scale
+                                new_height = orig_height * scale
+                                print(f"      📐 적정 크기 조정: {orig_width:.1f}x{orig_height:.1f} → {new_width:.1f}x{new_height:.1f}px")
+                            else:
+                                # 적정 범위는 원본 사용
+                                new_width = orig_width
+                                new_height = orig_height
+                                print(f"      ✅ 적정 크기: {new_width:.1f}x{new_height:.1f}px")
                         
                         conf = float(box.conf[0].cpu().numpy())
                         class_id = int(box.cls[0].cpu().numpy())
