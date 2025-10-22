@@ -23,13 +23,14 @@ DEFAULT_MODEL_PATH = MODELS_DIR / "colab_yolo" / "best.pt"
 
 # 🎯 추론(Inference) API 설정
 DEFAULT_CONFIDENCE = 0.16  # 추론 시 탐지 신뢰도 임계값 (16%)
-DEFAULT_IOU_THRESHOLD = 0.45  # 추론 시 NMS IoU 임계값 (균형잡힌 탐지용)
+DEFAULT_IOU_THRESHOLD = 0.40  # 추론 시 NMS IoU 임계값 (소나무 특화)
 
 # 📦 데이터셋 생성(Preprocessing) 설정
 DEFAULT_TILE_SIZE = 1024  # 데이터셋 생성 시 타일 분할 크기 (1024px)
 # 🎯 멀티스케일 바운딩박스 설정 (GPS 밀도 기반 적응적 크기)
+DYNAMIC_BBOX_SIZING = True   # 밀도 기반 동적 바운딩박스 크기 조정 활성화
 ADAPTIVE_BBOX_MIN_SIZE = 16  # 밀집 지역 최소 크기 (16px)
-ADAPTIVE_BBOX_MAX_SIZE = 128 # 외딴 지역 최대 크기 (128px)
+ADAPTIVE_BBOX_MAX_SIZE = 32  # 외딴 지역 최대 크기 (32px)
 
 # 🎨 추론 결과 시각화 설정
 VISUALIZATION_BBOX_COLOR = (0, 255, 0)          # 탐지된 바운딩박스 색상 (녹색)
