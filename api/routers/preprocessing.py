@@ -20,38 +20,6 @@ import random
 import sys
 import logging
 from pathlib import Path
-from api import config
-
-router = APIRouter()# Pydantic 모델 정의
-
-# 전처리 API 라우터 - tile_and_label.py 기반
-# 대용량 GeoTIFF 이미지를 타일로 분할 + YOLO 라벨 자동 생성
-
-from fastapi import APIRouter, File, UploadFile, HTTPException, Form
-from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel
-from typing import List, Optional, Dict
-import os
-import tempfile
-import shutil
-import pandas as pd
-import numpy as np
-import rasterio
-from rasterio.transform import Affine
-from rasterio.windows import Window
-import datetime
-import zipfile
-import yaml
-import random
-import sys
-import logging
-from pathlib import Path
-import sys
-
-# 프로젝트 루트 경로 추가
-project_root = Path(__file__).parent.parent.parent
-sys.path.append(str(project_root))
-
 from .. import config
 
 router = APIRouter()
@@ -400,6 +368,16 @@ def process_tiles_and_labels_simple(image_path, tfw_params, df, output_images, o
                 # 전체 좌표를 픽셀로 변환 (한 번만 계산) + 추적 정보 포함
                 if not hasattr(process_tiles_and_labels_simple, '_pixel_coords'):
                     print("🔄 GPS 좌표를 픽셀 좌표로 변환 중... (최초 1회)", flush=True)
+                    print(f"🔍 이미지 크기: {width}x{height}", flush=True)
+                    print(f"🔍 TFW 매개변수: {tfw_params}", flush=True)
+                    
+                    # 첫 몇 개 좌표 샘플 출력
+                    sample_coords = df.head(3)
+                    print(f"🔍 GPS 좌표 샘플:", flush=True)
+                    for idx, row in sample_coords.iterrows():
+                        px, py = tm_to_pixel(row["x"], row["y"], tfw_params)
+                        print(f"   GPS ({row['x']}, {row['y']}) → 픽셀 ({px:.1f}, {py:.1f})", flush=True)
+                    
                     pixel_coords = []
                     for idx, row in df.iterrows():
                         px, py = tm_to_pixel(row["x"], row["y"], tfw_params)
@@ -417,6 +395,14 @@ def process_tiles_and_labels_simple(image_path, tfw_params, df, output_images, o
                     
                     process_tiles_and_labels_simple._pixel_coords = pixel_coords
                     print(f"✅ {len(pixel_coords)}개 좌표 변환 완료 (범위 외: {len(out_of_bounds_coordinates)}개)", flush=True)
+                    
+                    # 범위 외 좌표 샘플 출력 (문제 진단용)
+                    if len(out_of_bounds_coordinates) > 0:
+                        print(f"🔍 범위 외 좌표 샘플 (첫 3개):", flush=True)
+                        for i, coord_info in enumerate(out_of_bounds_coordinates[:3]):
+                            orig = coord_info['original_coords']
+                            pixel = coord_info['pixel_coords']
+                            print(f"   GPS ({orig[0]}, {orig[1]}) → 픽셀 ({pixel[0]:.1f}, {pixel[1]:.1f}) [범위: 0~{width-1}, 0~{height-1}]", flush=True)
                 
                 # 현재 타일 영역에 포함되는 좌표만 처리 (추적 포함)
                 for px, py, row, coord_idx in process_tiles_and_labels_simple._pixel_coords:
@@ -861,17 +847,38 @@ async def create_dataset(
             except Exception as e:
                 raise HTTPException(status_code=400, detail=f"CSV 파일 읽기 실패: {str(e)}")
             
-            # 좌표 컬럼 확인
+            # 좌표 컬럼 확인 (대소문자 구분하지 않음)
             x_col, y_col = None, None
-            if 'x' in df.columns and 'y' in df.columns:
-                x_col, y_col = 'x', 'y'
-            elif 'longitude' in df.columns and 'latitude' in df.columns:
-                x_col, y_col = 'longitude', 'latitude'
+            
+            # 컬럼명을 소문자로 변환하여 검사
+            lower_columns = [col.lower() for col in df.columns]
+            original_columns = df.columns.tolist()
+            
+            # x, y 컬럼 찾기
+            if 'x' in lower_columns and 'y' in lower_columns:
+                x_idx = lower_columns.index('x')
+                y_idx = lower_columns.index('y')
+                x_col, y_col = original_columns[x_idx], original_columns[y_idx]
+            # longitude, latitude 컬럼 찾기
+            elif 'longitude' in lower_columns and 'latitude' in lower_columns:
+                lon_idx = lower_columns.index('longitude')
+                lat_idx = lower_columns.index('latitude')
+                x_col, y_col = original_columns[lon_idx], original_columns[lat_idx]
+            # lon, lat 컬럼 찾기 (축약형)
+            elif 'lon' in lower_columns and 'lat' in lower_columns:
+                lon_idx = lower_columns.index('lon')
+                lat_idx = lower_columns.index('lat')
+                x_col, y_col = original_columns[lon_idx], original_columns[lat_idx]
             else:
+                print(f"❌ CSV 파일 컬럼 확인 실패:", flush=True)
+                print(f"📋 발견된 컬럼: {list(df.columns)}", flush=True)
+                print(f"🔍 필요한 컬럼: 'x,y', 'X,Y', 'longitude,latitude', 또는 'lon,lat' (대소문자 무관)", flush=True)
                 raise HTTPException(
                     status_code=400, 
-                    detail="CSV 파일에 'x,y' 또는 'longitude,latitude' 컬럼이 필요합니다."
+                    detail=f"CSV 파일에 좌표 컬럼이 필요합니다. 지원되는 컬럼명: 'x,y', 'X,Y', 'longitude,latitude', 'lon,lat' (대소문자 무관). 발견된 컬럼: {list(df.columns)}"
                 )
+            
+            print(f"✅ 좌표 컬럼 발견: {x_col} → x, {y_col} → y", flush=True)
             
             # 좌표 컬럼 이름 통일
             df = df.rename(columns={x_col: 'x', y_col: 'y'})
@@ -967,7 +974,13 @@ async def create_dataset(
             print(f"📊 전체 데이터셋: {len(matched_files)}개")
             print(f"📊 양성 샘플 (피해목 있음): {positive_samples}개")
             print(f"📊 음성 샘플 (피해목 없음): {negative_samples}개")
-            print(f"📊 클래스 비율: Positive={positive_samples/(positive_samples+negative_samples)*100:.1f}%, Negative={negative_samples/(positive_samples+negative_samples)*100:.1f}%")
+            
+            # zero division 방지
+            total_samples = positive_samples + negative_samples
+            if total_samples > 0:
+                print(f"📊 클래스 비율: Positive={positive_samples/total_samples*100:.1f}%, Negative={negative_samples/total_samples*100:.1f}%")
+            else:
+                print(f"📊 클래스 비율: 샘플이 없어 계산할 수 없습니다")
             
             if len(matched_files) == 0:
                 raise HTTPException(
@@ -1088,8 +1101,14 @@ async def create_dataset(
                 coordinate_validation=coordinate_tracking  # 🔍 GPS 좌표 추적 정보 추가
             )
             
+    except HTTPException:
+        # HTTPException은 그대로 재발생 (400 에러 등을 유지)
+        raise
     except Exception as e:
+        import traceback
         print(f"❌ 통합 처리 오류: {str(e)}", flush=True)
+        print(f"📋 상세 에러 정보:", flush=True)
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"통합 데이터셋 생성 중 오류 발생: {str(e)}")
 
 
