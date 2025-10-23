@@ -88,7 +88,7 @@ async def mark_inference_boxes(
                 raise HTTPException(status_code=400, detail=f"CSV 파일 읽기 실패: {str(e)}")
             
             # 출력 디렉토리 생성
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M")
             output_dir = os.path.join(DEFAULT_OUTPUT_DIR, f"marked_{timestamp}")
             os.makedirs(output_dir, exist_ok=True)
             

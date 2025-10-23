@@ -488,7 +488,8 @@ async def detect_damaged_trees(
     confidence: float = Form(default=config.DEFAULT_CONFIDENCE, description="탐지 신뢰도 임계값 (0.16)"),
     iou_threshold: float = Form(default=config.DEFAULT_IOU_THRESHOLD, description="IoU 임계값 (중복 탐지 제거용)"),
     save_visualization: bool = Form(default=True, description="탐지 결과 시각화 이미지 저장 여부"),
-    output_tm_coordinates: bool = Form(default=True, description="TM 좌표 변환 여부")
+    output_tm_coordinates: bool = Form(default=True, description="TM 좌표 변환 여부"),
+    output_filename: str = Form(default="", description="사용자 지정 ZIP 파일명 (선택적, 공백이면 자동 생성)")
 ):
     """
     🚀 **소나무재선충병 피해목 탐지 API**
@@ -571,7 +572,7 @@ async def detect_damaged_trees(
                 raise HTTPException(status_code=400, detail="ZIP 파일에서 이미지 파일을 찾을 수 없습니다.")
             
             # 결과 저장용 디렉토리 생성
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M")
             output_base = os.path.join(DEFAULT_OUTPUT_DIR, f"batch_inference_{timestamp}")
             
             # 기본 출력 디렉토리가 없으면 생성
@@ -913,7 +914,17 @@ async def detect_damaged_trees(
             # 결과 ZIP 파일 생성
             results_zip_url = None
             if all_results or (save_visualization and viz_dir and os.path.exists(viz_dir) and os.listdir(viz_dir)):
-                zip_filename = f"batch_results_{timestamp}.zip"
+                # 사용자 지정 파일명 또는 자동 생성
+                if output_filename.strip():
+                    # 사용자가 지정한 파일명 사용 (.zip 확장자 자동 추가)
+                    if not output_filename.endswith('.zip'):
+                        zip_filename = f"{output_filename}.zip"
+                    else:
+                        zip_filename = output_filename
+                else:
+                    # 기본 자동 생성 파일명
+                    zip_filename = f"batch_results_{timestamp}.zip"
+                
                 zip_path = os.path.join(DEFAULT_OUTPUT_DIR, zip_filename)
                 
                 with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:

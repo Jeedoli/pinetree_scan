@@ -549,7 +549,8 @@ async def preprocessing_status():
 @router.post("/tile-for-inference", response_model=InferenceTilingResponse)
 async def create_inference_tiles(
     image_file: UploadFile = File(..., description="원본 GeoTIFF 이미지"),
-    tile_size: int = Form(default=DEFAULT_TILE_SIZE, description="타일 크기 (픽셀)")
+    tile_size: int = Form(default=DEFAULT_TILE_SIZE, description="타일 크기 (픽셀)"),
+    output_filename: str = Form(default="", description="사용자 지정 ZIP 파일명 (선택적, 공백이면 자동 생성)")
 ):
     """
     추론용 타일 생성: 원본 이미지를 추론하기 위해 타일로 분할합니다.
@@ -557,6 +558,7 @@ async def create_inference_tiles(
     
     - **image_file**: 원본 GeoTIFF 이미지 파일 (.tif/.tiff)
     - **tile_size**: 타일 한 변 크기 (기본: 1024픽셀)
+    - **output_filename**: 결과 ZIP 파일명 (선택적, 기본: 자동 생성)
     """
     
     try:
@@ -573,44 +575,20 @@ async def create_inference_tiles(
             with open(image_path, "wb") as f:
                 shutil.copyfileobj(image_file.file, f)
             
-            # 날짜 기반 접두사 생성
-            today = datetime.datetime.now().strftime("%Y%m%d")
-            
-            # 같은 날짜의 기존 폴더들 확인하여 순차 접두사 결정
-            existing_prefixes = []
-            if os.path.exists(DEFAULT_OUTPUT_DIR):
-                for folder in os.listdir(DEFAULT_OUTPUT_DIR):
-                    if folder.startswith(f"inference_tiles_") and today in folder:
-                        # inference_tiles_A20250915_ 형태에서 접두사 추출
-                        parts = folder.split('_')
-                        if len(parts) >= 3 and parts[2].startswith(('A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J')):
-                            prefix_char = parts[2][0]
-                            existing_prefixes.append(prefix_char)
-            
-            # 다음 순차 접두사 결정 (A, B, C, ... Z 순서)
-            next_prefix = 'A'
-            for char in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ':
-                if char not in existing_prefixes:
-                    next_prefix = char
-                    break
-            
-            # 파일 접두사 생성
-            file_prefix = f"{next_prefix}{today}"
-            
-            # 출력 디렉토리 생성
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_base = DEFAULT_OUTPUT_DIR / f"inference_tiles_{file_prefix}_{timestamp}"
+            # 출력 디렉토리 생성 (간단한 날짜_시분 형식)
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M")
+            output_base = DEFAULT_OUTPUT_DIR / f"inference_tiles_{timestamp}"
             output_images = output_base / "images"
             
             output_images.mkdir(parents=True, exist_ok=True)
             
             # 추론용 타일 분할 실행
             tile_info, original_size = process_inference_tiles(
-                image_path, str(output_images), tile_size, file_prefix
+                image_path, str(output_images), tile_size, timestamp
             )
             
             # ZIP 파일 생성
-            zip_path = create_inference_tiles_zip(output_base, timestamp)
+            zip_path = create_inference_tiles_zip(output_base, timestamp, output_filename)
             
             # 통계 계산
             total_tiles = len(tile_info)
@@ -632,7 +610,7 @@ async def create_inference_tiles(
 
 
 def process_inference_tiles(
-    image_path: str, output_images: str, tile_size: int, file_prefix: str
+    image_path: str, output_images: str, tile_size: int, timestamp: str
 ) -> tuple[List[InferenceTileInfo], tuple]:
     """추론용 타일 분할 메인 로직 (라벨링 없음)"""
     
@@ -656,7 +634,7 @@ def process_inference_tiles(
                 
                 # RGB 3채널만 추출하여 타일 이미지 생성
                 tile_img = src.read([1, 2, 3], window=window)
-                tile_name = f"{file_prefix}_tile_{tx}_{ty}.tif"
+                tile_name = f"{timestamp}_tile_{tx}_{ty}.tif"
                 
                 # 타일 이미지 저장 (지리참조 정보 보존)
                 tile_path = os.path.join(output_images, tile_name)
@@ -686,9 +664,20 @@ def process_inference_tiles(
     return tile_info, original_size
 
 
-def create_inference_tiles_zip(output_base: Path, timestamp: str) -> str:
+def create_inference_tiles_zip(output_base: Path, timestamp: str, output_filename: str = "") -> str:
     """생성된 추론용 타일을 ZIP 파일로 압축"""
-    zip_filename = f"inference_tiles_{timestamp}.zip"
+    
+    # 사용자 지정 파일명 또는 자동 생성
+    if output_filename.strip():
+        # 사용자가 지정한 파일명 사용 (.zip 확장자 자동 추가)
+        if not output_filename.endswith('.zip'):
+            zip_filename = f"{output_filename}.zip"
+        else:
+            zip_filename = output_filename
+    else:
+        # 기본 자동 생성 파일명
+        zip_filename = f"inference_tiles_{timestamp}.zip"
+    
     zip_path = DEFAULT_OUTPUT_DIR / zip_filename
     
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
@@ -716,6 +705,7 @@ async def create_dataset(
     csv_file: UploadFile = File(..., description="GPS 좌표 CSV 파일 (x, y 또는 longitude, latitude 컬럼)"),
     tfw_file: UploadFile = File(..., description="지리참조를 위한 TFW 파일"),
     file_prefix: str = Form(..., description="생성될 타일 파일명 접두사"),
+    output_filename: str = Form(default="", description="최종 ZIP 파일명 (비워두면 자동 생성)"),
     tile_size: int = Form(default=config.DEFAULT_TILE_SIZE, description="타일 크기 (픽셀)"),
 
     class_id: int = Form(default=0, description="YOLO 클래스 ID"),
@@ -805,7 +795,7 @@ async def create_dataset(
             raise HTTPException(status_code=400, detail="TFW 파일이 필요합니다.")
         
         # 출력 디렉토리 생성
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M")
         output_base = DEFAULT_OUTPUT_DIR / f"complete_training_{timestamp}"
         output_base.mkdir(parents=True, exist_ok=True)
         
@@ -1049,7 +1039,20 @@ async def create_dataset(
             
             # Step 4: ZIP 파일 생성
             print("🔄 Step 4: ZIP 파일 생성 시작...", flush=True)
-            zip_filename = f"complete_training_dataset_{file_prefix}_{timestamp}.zip"
+            
+            # 사용자 지정 파일명 또는 자동 생성
+            if output_filename.strip():
+                # 사용자가 지정한 파일명 사용 (.zip 확장자 자동 추가)
+                if not output_filename.endswith('.zip'):
+                    zip_filename = f"{output_filename}.zip"
+                else:
+                    zip_filename = output_filename
+                print(f"📁 사용자 지정 파일명: {zip_filename}", flush=True)
+            else:
+                # 기본 자동 생성 파일명
+                zip_filename = f"complete_training_dataset_{file_prefix}_{timestamp}.zip"
+                print(f"📁 자동 생성 파일명: {zip_filename}", flush=True)
+            
             zip_path = DEFAULT_OUTPUT_DIR / zip_filename
             
             with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
@@ -1328,7 +1331,7 @@ async def merge_multiple_datasets(
     - 통합 data.yaml 생성
     """
     
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M")
     
     try:
         # 임시 작업 디렉토리 생성
