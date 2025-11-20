@@ -22,13 +22,13 @@ sys.path.append(str(project_root))
 from api import config
 
 # 라우터 import
-from api.routers import inference, preprocessing, visualization, model_performance
+from api.routers import inference, preprocessing, visualization, model_performance, ai_analysis
 
 # FastAPI 앱 생성
 app = FastAPI(
-    title="🌲 Pinetree Damage Detection API",
-    description="소나무재선충병 피해목 자동 탐지 REST API",
-    version="1.0.0",
+    title="🌲 Pinetree Damage Detection & AI Analysis API",
+    description="소나무재선충병 피해목 자동 탐지 + RAG 기반 AI 분석 REST API",
+    version="2.0.0",
     docs_url="/docs",
     redoc_url="/redoc"
 )
@@ -50,6 +50,7 @@ app.include_router(inference.router, prefix="/api/v1/inference", tags=["추론/�
 app.include_router(preprocessing.router, prefix="/api/v1/preprocessing", tags=["전처리"])
 app.include_router(visualization.router, prefix="/api/v1/visualization", tags=["시각화"])
 app.include_router(model_performance.router, prefix="/api/v1/model-performance", tags=["모델 성능 분석"])
+app.include_router(ai_analysis.router, prefix="/api/v1/ai-analysis", tags=["🤖 AI 분석 챗봇"])
 
 # 서버 시작 시 필요한 디렉토리 생성
 @app.on_event("startup")
@@ -69,15 +70,22 @@ async def startup_event():
 @app.get("/")
 async def root():
     return {
-        "message": "🌲 Pinetree Damage Detection API",
-        "version": "1.0.0",
-        "description": "소나무재선충병 피해목 자동 탐지 REST API",
+        "message": "🌲 Pinetree Damage Detection & AI Analysis API",
+        "version": "2.0.0",
+        "description": "소나무재선충병 피해목 자동 탐지 + RAG 기반 AI 분석 REST API",
         "docs": "/docs",
         "max_file_size": f"{config.MAX_FILE_SIZE / (1024**3):.1f}GB",
+        "features": [
+            "🎯 3단계 멀티스케일 YOLO 탐지",
+            "🤖 RAG 기반 AI 챗봇 분석",
+            "📊 종합 리포트 자동 생성",
+            "🗺️ GPS 좌표 정밀 변환"
+        ],
         "endpoints": {
             "inference": "/api/v1/inference",
-            "preprocessing": "/api/v1/preprocessing",
+            "preprocessing": "/api/v1/preprocessing", 
             "visualization": "/api/v1/visualization",
+            "ai_analysis": "/api/v1/ai-analysis",
             "model_performance": "/api/v1/model-performance"
         },
         "recommended_apis": {
