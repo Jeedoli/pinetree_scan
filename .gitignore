@@ -14,6 +14,7 @@
 *.jpg
 *.png
 *.pkl
+*.ipynb
 
 runs/
 *.jpg
