@@ -13,6 +13,7 @@
 *.csv
 *.jpg
 *.png
+*.pkl
 
 runs/
 *.jpg
@@ -24,6 +25,7 @@ results/
 tiles/
 training_images/
 knowledge_base/
+
 
 # Jupyter/VSCode 등 환경 파일 무시
 .ipynb_checkpoints/
