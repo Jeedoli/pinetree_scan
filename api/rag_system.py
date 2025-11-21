@@ -1,6 +1,7 @@
 # RAG 시스템 핵심 모듈
 import os
 import json
+import logging
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import re
@@ -9,6 +10,9 @@ from dotenv import load_dotenv
 
 # 환경 변수 로드
 load_dotenv()
+
+# 로거 설정
+logger = logging.getLogger(__name__)
 
 # AI 모델 관련 import
 try:
@@ -22,7 +26,7 @@ except ImportError:
 # LangChain + OpenAI 관련 import
 try:
     from langchain_openai import ChatOpenAI
-    from langchain_core.prompts import ChatPromptTemplate
+    from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
     from langchain_core.output_parsers import StrOutputParser
     LANGCHAIN_AVAILABLE = True
     print("✅ LangChain + OpenAI 라이브러리 로드 성공")
@@ -1806,7 +1810,7 @@ class SimpleRAG:
         return self._extract_natural_answer(question, context)
     
     def _generate_free_llm_response(self, question: str, context: str = "") -> str:
-        """LLM이 완전히 자유롭게 답변 생성 - 하드코딩 절대 금지"""
+        """LLM이 완전히 자유롭게 답변 생성 - 하드코딩 금지"""
         
         # 매우 심플한 대화형 프롬프트 - LLM이 자기 지식으로 자유롭게 답변
         if context and len(context.strip()) > 20:
