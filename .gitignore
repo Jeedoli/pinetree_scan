@@ -57,3 +57,6 @@ data/
 .env
 .DS_Store
 requirements.txt
+
+# Local images for README (upload manually to GitHub)
+docs/images/
