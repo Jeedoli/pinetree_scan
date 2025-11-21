@@ -1,6 +1,18 @@
-# 소나무 피해목 탐지 시스템
+# 🌲 Pinetree Scan: 소나무 피해목 AI 탐지 시스템
 
-드론으로 찍은 항공사진 ***tiff, tfw*** 확장자 파일을 기반으로 소나무재선충병 피해목을 자동으로 찾아 TM좌표로 변환하여 csv로 저장시켜주는 프로젝트입니다.
+<p align="left">
+  <img src="https://img.shields.io/badge/Python-3.10+-blue?logo=python&logoColor=white" />
+  <img src="https://img.shields.io/badge/YOLOv11s-Ultralytics-00FFFF?logo=yolo&logoColor=white" />
+  <img src="https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white" />
+  <img src="https://img.shields.io/badge/PyTorch-EE4C2C?logo=pytorch&logoColor=white" />
+  <img src="https://img.shields.io/badge/OpenAI-412991?logo=openai&logoColor=white" />
+  <img src="https://img.shields.io/badge/LangChain-1C3C3C?logo=langchain&logoColor=white" />
+  <img src="https://img.shields.io/badge/FAISS-0467DF?logo=meta&logoColor=white" />
+  <img src="https://img.shields.io/badge/rasterio-007396?logo=python&logoColor=white" />
+</p>
+
+> 드론 항공사진(GeoTIFF)에서 소나무재선충병 피해목을 pytorch모델을 사용하여 추론하여 자동 탐지하고, GPS 좌표로 변환하여 csv형태로 저장 가능합니다.
+> RAG 기반 AI 챗봇으로 탐지 시스템 및 병해충 관련 질문에 답변할 수 있습니다.
 
 ## 프로젝트 소개
 
@@ -44,6 +56,32 @@ LangChain을 활용해 OpenAI API를 쉽게 호출할 수 있게 하였고, RAG(
 - 8개 지식 베이스 문서 활용 (논문, 가이드라인, 통계 데이터 등)
 - 질문에 맞는 참고 자료 자동 선택하여 답변 생성
 
+
+## 사용한 기술
+
+**객체 탐지**
+- YOLOv11s (Ultralytics 라이브러리)
+- PyTorch
+
+**API 서버**
+- FastAPI
+- Uvicorn
+
+**좌표 처리**
+- rasterio (GeoTIFF 파일 읽기)
+- pyproj (픽셀 → GPS 좌표 변환)
+
+**AI 챗봇**
+- OpenAI GPT-4o-mini API
+- LangChain (프롬프트 관리)
+- FAISS (문서 검색)
+- Sentence Transformers (임베딩)
+
+**기타**
+- pandas, numpy, OpenCV (데이터 처리)
+- Poetry (패키지 관리)
+
+
 ## 시스템 동작 흐름
 
 ### 피해목 탐지 플로우
@@ -69,29 +107,6 @@ LangChain을 활용해 OpenAI API를 쉽게 호출할 수 있게 하였고, RAG(
 | 6 | 응답 파싱 | LangChain StrOutputParser | AI 응답 | 정제된 텍스트 |
 | 7 | API 응답 | FastAPI | 답변 + 메타데이터 | JSON |
 
-## 사용한 기술
-
-**객체 탐지**
-- YOLOv11s (Ultralytics 라이브러리)
-- PyTorch
-
-**API 서버**
-- FastAPI
-- Uvicorn
-
-**좌표 처리**
-- rasterio (GeoTIFF 파일 읽기)
-- pyproj (픽셀 → GPS 좌표 변환)
-
-**AI 챗봇**
-- OpenAI GPT-4o-mini API
-- LangChain (프롬프트 관리)
-- FAISS (문서 검색)
-- Sentence Transformers (임베딩)
-
-**기타**
-- pandas, numpy, OpenCV (데이터 처리)
-- Poetry (패키지 관리)
 
 ## 프로젝트 구조
 
