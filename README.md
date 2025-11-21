@@ -316,8 +316,8 @@ API에서 사용하는 추론 설정은 `api/config.py`에 있습니다:
 - [ ] 프론트엔드 (지금은 Swagger UI만 있음)
 
 ## 성능 분석 결과
+<img width="700" height="555" alt="confidence_threshold_optimization" src="https://github.com/user-attachments/assets/68a00907-8e42-4de5-a3aa-9427a05cb2b6" />
 
-![신뢰도 임계값 최적화](docs/images/confidence_threshold_optimization.png)
 
 **최적 임계값 선정 과정**
 - **mAP@0.5: 0.654** - 전체 모델 성능 지표
@@ -348,8 +348,7 @@ API에서 사용하는 추론 설정은 `api/config.py`에 있습니다:
 
 **2025년 10월 23일 처리 결과 - 총 7,908개 피해목 탐지**
 
-![전체 탐지 결과](docs/images/full_detection_map.jpg)
-
+![full_detection_map](https://github.com/user-attachments/assets/bd0ff682-1dab-4978-80a8-3d93f9999cf1)
 *드론 항공 촬영 이미지를 54개 타일로 분할하여 YOLOv11s 모델로 추론한 결과를 다시 병합하여 이미지화*
 
 ---
@@ -361,17 +360,17 @@ API에서 사용하는 추론 설정은 `api/config.py`에 있습니다:
 <table>
   <tr>
     <td align="center">
-      <img src="docs/images/tile_1.jpg" width="280px"/><br/>
+      <img src="https://github.com/user-attachments/assets/4327d91f-ff54-49cf-9503-3bb55d534ed6" width="280px"/><br/>
       <b>타일 (0, 0)</b><br/>
       탐지 개수: 다수 검출
     </td>
     <td align="center">
-      <img src="docs/images/tile_2.jpg" width="280px"/><br/>
+      <img src="https://github.com/user-attachments/assets/e8fcbe8c-826e-43fe-952e-e2e9c60fe0e6" width="280px"/><br/>
       <b>타일 (1, 1)</b><br/>
       탐지 개수: 다수 검출
     </td>
     <td align="center">
-      <img src="docs/images/tile_3.jpg" width="280px"/><br/>
+      <img src="https://github.com/user-attachments/assets/9158dea8-48c1-4d7a-b8c0-034cb9a0369b" width="280px"/><br/>
       <b>타일 (2, 2)</b><br/>
       탐지 개수: 다수 검출
     </td>
