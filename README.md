@@ -1,394 +1,313 @@
-# 🌲 Pinetree Scan: 소나무 피해목 AI 탐지 시스템
+# 소나무 피해목 탐지 시스템
 
-<p align="left">
-  <img src="https://img.shields.io/badge/Python-3.10+-blue?logo=python" />
-  <img src="https://img.shields.io/badge/YOLOv11s-ultralytics-yellowgreen?logo=github" />
-  <img src="https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white" />
-  <img src="https://img.shields.io/badge/Google%20Colab-F9AB00?logo=googlecolab&logoColor=white" />
-  <img src="https://img.shields.io/badge/rasterio-%23007396.svg?logo=python&logoColor=white" />
-  <img src="https://img.shields.io/badge/mAP-0.7+-success" />
-  <img src="https://img.shields.io/badge/Multi--Scale-Adaptive-orange" />
-</p>
+드론으로 찍은 항공사진 ***tiff, tfw*** 확장자 파일을 기반으로 소나무재선충병 피해목을 자동으로 찾아 TM좌표로 변환하여 csv로 저장시켜주는 프로젝트입니다.
 
-> **드론/항공 이미지에서 YOLOv11s + 멀티스케일 적응적 바운딩박스로 소나무 피해목을 자동 탐지하고, GPS 좌표로 변환하여 저장하는 AI 기반 공간정보 시스템**
+## 프로젝트 소개
 
----
+산림청이나 지자체에서 소나무재선충병 피해목을 찾으려면 산을 직접 돌아다니며 일일이 확인해야 합니다.
+드론으로 찍은 사진이 있어도 사람이 하나하나 눈으로 확인하려면 시간이 오래 걸립니다.
 
-## 🚀 주요 특징
+이 문제를 해결하기 위해 YOLO 객체 탐지 모델을 사용했고, 탐지 결과를 GPS 좌표로 변환해서
+현장에서 바로 대응 할 수 있도록 개선해보았습니다.
 
-- 🎯 **멀티스케일 적응적 바운딩박스**: GPS 밀도 기반으로 16~128px 크기 자동 조절
-- 🧠 **지능형 데이터 생성**: 피해목 분포에 따른 적응적 라벨 크기 결정
-- 🌐 **Google Colab 완벽 지원**: 클라우드 GPU로 무료 학습 환경 제공
-- 🔥 **FastAPI REST API**: 대용량 파일(2GB) 지원, Swagger UI 자동 문서화
-- 📊 **다중 지역 데이터셋 병합**: 여러 지역 데이터를 통합하여 robust한 모델 학습
-- 🗺️ **정밀 GPS 변환**: GeoTIFF 공간정보 기반 위경도 좌표 자동 변환
-- 📈 **개선된 성능**: 캐시 버그 수정 및 멀티스케일로 mAP 0.7+ 달성
+추가로 Langchain + RAG을 배워보고 활용해보고 싶었기에 현재 프로젝트에 응용하여
+소나무재선충병이나 탐지 방법에 대해 궁금한 점을 물어볼 수 있는 AI 챗봇으로 개발해 보았습니다.
+LangChain을 활용해 OpenAI API를 쉽게 호출할 수 있게 하였고, RAG(Retrieval-Augmented Generation)를 써서 관련 자료나 논문 등등 데이터를 특정한 디렉토리에 관리해준다면 해당 데이터를 검색해서 답변해줄 수 있게 진행했습니다.
 
----
+## 주요 기능
 
-## 🧰 기술 스택
+### 1. 피해목 자동 탐지
+- **YOLOv11s** 모델을 사용한 실시간 객체 탐지
+- Confidence Threshold 0.16 적용 (낮게 설정하여 피해목 놓치지 않게)
+- IoU 0.45로 중복 탐지 제거
+- 배치 처리로 여러 이미지 동시 분석 가능
 
-| 구분 | 기술 |
-|------|------|
-| **AI 모델** | YOLOv11s, Ultralytics, PyTorch |
-| **클라우드 학습** | Google Colab, GPU T4/V100 |
-| **API 서버** | FastAPI, Uvicorn, Swagger UI |
-| **공간정보** | rasterio, pyproj, GDAL |
-| **데이터** | pandas, numpy, OpenCV |
+### 2. GeoTIFF 좌표 변환
+- **rasterio**로 GeoTIFF 메타데이터 읽기 (affine transform 정보)
+- 픽셀 좌표 → TM 좌표 → GPS 좌표(위도/경도) 3단계 변환
+- **pyproj**로 다양한 좌표계 지원 (EPSG:5186, EPSG:4326 등)
+- 변환 결과를 CSV로 자동 저장
 
----
+### 3. 대용량 이미지 전처리
+- 큰 항공사진을 512x512 또는 1024x1024 타일로 자동 분할
+- 타일 간 오버랩 설정으로 경계 피해목 놓치지 않음
+- ZIP 파일로 압축하여 저장 및 다운로드
 
-## 🗂️ 프로젝트 구조
+### 4. 탐지 결과 시각화
+- 탐지된 피해목 위치에 바운딩박스 + 신뢰도 표시
+- 모든 탐지 결과(타일화 이미지)를 하나의 이미지로 병합 (merged detection)
+- 타일로 쪼개진 개별 이미지도 별도 저장
+
+### 5. AI 챗봇 (RAG 시스템)
+- OpenAI GPT-4o-mini + LangChain으로 자연스러운 대화
+- FAISS 의미 기반 검색으로 관련 문서 자동 검색
+- 8개 지식 베이스 문서 활용 (논문, 가이드라인, 통계 데이터 등)
+- 질문에 맞는 참고 자료 자동 선택하여 답변 생성
+
+## 시스템 동작 흐름
+
+### 피해목 탐지 플로우
+
+| 단계 | 작업 | 사용 기술 | 입력 | 출력 |
+|------|------|-----------|------|------|
+| 1 | 이미지 업로드 | FastAPI | `.tif` / `.zip` | 이미지 파일 |
+| 2 | 타일 분할 (선택) | OpenCV, NumPy | 대용량 이미지 | 512x512 타일들 |
+| 3 | YOLO 추론 | YOLOv11s, PyTorch | 타일 이미지 | 바운딩박스 좌표 |
+| 4 | 픽셀 → GPS 변환 | rasterio, pyproj | GeoTIFF + 픽셀좌표 | 위도/경도 |
+| 5 | 결과 저장 | pandas | 탐지 결과 | CSV 파일 |
+| 6 | 시각화 생성 | OpenCV | 이미지 + 탐지정보 | 바운딩박스 이미지 |
+
+### AI 챗봇 플로우
+
+| 단계 | 작업 | 사용 기술 | 입력 | 출력 |
+|------|------|-----------|------|------|
+| 1 | 질문 입력 | FastAPI | 사용자 질문 | 텍스트 |
+| 2 | 문서 임베딩 | Sentence Transformers | 질문 텍스트 | 384차원 벡터 |
+| 3 | 의미 검색 | FAISS | 질문 벡터 | 관련 문서 3개 |
+| 4 | 프롬프트 생성 | LangChain ChatPromptTemplate | 질문 + 문서 | 프롬프트 |
+| 5 | LLM 호출 | OpenAI GPT-4o-mini | 프롬프트 | AI 답변 |
+| 6 | 응답 파싱 | LangChain StrOutputParser | AI 응답 | 정제된 텍스트 |
+| 7 | API 응답 | FastAPI | 답변 + 메타데이터 | JSON |
+
+## 사용한 기술
+
+**객체 탐지**
+- YOLOv11s (Ultralytics 라이브러리)
+- PyTorch
+
+**API 서버**
+- FastAPI
+- Uvicorn
+
+**좌표 처리**
+- rasterio (GeoTIFF 파일 읽기)
+- pyproj (픽셀 → GPS 좌표 변환)
+
+**AI 챗봇**
+- OpenAI GPT-4o-mini API
+- LangChain (프롬프트 관리)
+- FAISS (문서 검색)
+- Sentence Transformers (임베딩)
+
+**기타**
+- pandas, numpy, OpenCV (데이터 처리)
+- Poetry (패키지 관리)
+
+## 프로젝트 구조
 
 ```
 pinetree_scan/
-├── 📊 notebooks/
-│   └── YOLOv11s_Smart_Training.ipynb    # Google Colab 학습 노트북
-├── 🚀 api/                              # FastAPI 서버
-│   ├── main.py                          # API 메인 애플리케이션
-│   ├── config.py                        # API 설정 (conf=0.16, iou=0.45)
-│   └── routers/                         # API 엔드포인트
-│       ├── inference.py                 # 피해목 탐지 API
-│       ├── preprocessing.py             # 멀티스케일 데이터 전처리 API
-│       ├── visualization.py             # 결과 시각화 API
-│       └── model_performance.py         # 모델 성능 평가 API
-├── 🤖 models/                           # 학습된 모델
-│   └── colab_yolo/best.pt              # YOLOv11s 탐지 모델
-├── 📁 data/
-│   ├── api_outputs/                     # API 결과 저장소
-│   └── training_data/                   # 학습 데이터
-└── 📈 results/                          # 학습 결과
-
-## 🏗️ 시스템 아키텍처
-
-```
-🌲 Pinetree Scan Architecture
-
-📡 데이터 수집
-├── 🛰️ GeoTIFF (항공이미지)
-├── 📍 GPS 좌표 (CSV)  
-└── 🗺️ 지리참조 (TFW)
-      ↓
-🧠 멀티스케일 전처리
-├── GPS 밀도 분석 (50px 반경)
-├── 적응적 바운딩박스 (16~128px)
-└── 타일 분할 + 라벨 생성
-      ↓  
-🤖 YOLOv11s 학습
-├── Google Colab (무료 GPU)
-├── 다중 지역 데이터셋 병합
-└── 실시간 성능 모니터링
-      ↓
-🚀 FastAPI 추론 서버
-├── 배치 탐지 (conf=0.16, iou=0.45)
-├── GPS 좌표 변환
-└── 시각화 결과 생성
+├── api/
+│   ├── main.py                    # FastAPI 앱
+│   ├── config.py                  # 설정 (conf=0.16, iou=0.45)
+│   ├── rag_system.py              # RAG 챗봇 엔진
+│   ├── run_server.py              # 서버 실행 스크립트
+│   └── routers/
+│       ├── inference.py           # 탐지 API
+│       ├── preprocessing.py       # 데이터 전처리 API
+│       ├── visualization.py       # 시각화 API
+│       ├── model_performance.py   # 성능 평가 API
+│       └── ai_analysis.py         # AI 챗봇 API
+│
+├── models/
+│   └── colab_yolo/
+│       └── best.pt                # 학습된 YOLO 모델
+│
+├── knowledge_base/                # RAG용 지식 베이스 (추후 다른 논문 및 데이터 추가 예정)
+│   ├── detection_guidelines/
+│   │   └── 신뢰도별_처리방안.md
+│   ├── domain_expertise/
+│   │   └── 소나무재선충병_생태학적특성.md
+│   ├── forest_management/
+│   │   └── GPS좌표_기반_방제계획.md
+│   ├── 무인항공기를이용한딥러닝기반의소나무재선충병감염목탐지.pdf
+│   ├── 산림관리_매뉴얼.json
+│   ├── 산림병해_추가정보.txt
+│   ├── 지역별_탐지현황.csv
+│   └── 프로젝트_설정.json
+│
+├── notebooks/
+│   └── YOLOv11s_Smart_Training.ipynb  # Colab 학습 노트북
+│
+├── data/
+│   └── api_outputs/               # API 결과 저장
+│
+├── pyproject.toml                 # Poetry 의존성
+├── .env                           # OpenAI API 키 (gitignore됨)
+└── README.md
 ```
 
----
+## 시작하기
 
-## ⚡ 빠른 시작
-
-### 1️⃣ Google Colab에서 학습
-```python
-# Google Colab에서 실행
-!git clone https://github.com/your-repo/pinetree_scan.git
-%cd pinetree_scan
-!pip install ultralytics
-
-# 노트북 실행
-# notebooks/YOLOv11s_Smart_Training.ipynb
-```
-
-### 2️⃣ 로컬에서 API 서버 실행
-```bash
-# 의존성 설치
-poetry install
-
-# API 서버 시작  
-poetry run uvicorn api.main:app --reload
-
-# 브라우저에서 접속
-# http://localhost:8000/docs (Swagger UI)
-# http://localhost:8000/redoc (ReDoc)
-```
-```
-
----
-
-
-## 🔥 Google Colab으로 학습
-
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Jeedoli/pinetree_scan/blob/main/notebooks/YOLOv11s_Smart_Training.ipynb)
-
-```python
-# 1. 위 링크로 Colab 노트북 열기
-# 2. 런타임 → GPU 설정
-# 3. 1단계부터 4단계까지 순차 실행
-# 4. 자동으로 Google Drive에 모델 백업
-```
-
-**Colab 특징:**
-- 🆓 **무료 GPU**: T4/V100 GPU 무료 사용
-- 🤖 **24px 최적화**: 개별 나무 탐지 특화
-- 📊 **실시간 모니터링**: 학습 진행 상황 실시간 확인
-- ☁️ **자동 백업**: Google Drive 자동 연동
-
-### 🌐 API 서버 실행
+### 1. 저장소 클론
 
 ```bash
-# 1. 저장소 클론 및 의존성 설치
 git clone https://github.com/Jeedoli/pinetree_scan.git
 cd pinetree_scan
+```
+
+### 2. 의존성 설치
+
+Poetry 사용:
+```bash
 poetry install
-
-# 2. API 서버 실행
-poetry run uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
-
-# 3. 브라우저에서 API 문서 확인
-# http://localhost:8000/docs (Swagger UI)
-# http://localhost:8000/redoc (ReDoc)
 ```
 
----
-
-## 📊 학습 성능
-
-| 모델 | mAP@0.5 | mAP@0.5:0.95 | Precision | Recall | 특징 |
-|------|---------|--------------|-----------|--------|------|
-| **YOLOv11s-멀티스케일** | **0.7+** | **0.6+** | **0.75+** | **0.72+** | 적응적 바운딩박스 |
-| YOLOv11s-고정크기 | 0.5 | 0.45 | 0.60 | 0.55 | 32px 고정 (이전) |
-| YOLOv8s-64px | 0.45 | 0.40 | 0.55 | 0.50 | 기존 버전 |
-
-**🎯 멀티스케일 적응적 바운딩박스 시스템:**
-- **GPS 밀도 분석**: 50px 반경 내 GPS 포인트 개수로 밀도 계산
-- **적응적 크기 결정**:
-  - 🌲 **외딴 피해목** (밀도 ≤1): 128px 큰 바운딩박스
-  - � **낮은 밀도** (밀도 ≤3): 96px 중간 바운딩박스  
-  - 🌿 **중간 밀도** (밀도 ≤6): 64px 표준 바운딩박스
-  - 🍃 **높은 밀도** (밀도 ≤10): 48px 작은 바운딩박스
-  - 🌱 **밀집 지역** (밀도 >10): 16px 최소 바운딩박스
-
-**📈 성능 개선 효과:**
-- 🎯 **상황별 최적화**: GPS 밀도에 따른 바운딩박스 크기 자동 조절
-- � **캐시 버그 수정**: 각 지도별 독립적 GPS 좌표 처리
-- 📊 **데이터 품질 향상**: 1,155개 타일 (6개 지역 통합)
-- 🎛️ **최적화된 설정**: conf=0.16, iou=0.45로 민감한 탐지
-
----
-
-## 🌐 FastAPI REST API
-
-### 🎯 주요 엔드포인트
-
-#### **🔍 피해목 탐지 API**
-```http
-POST /api/v1/inference/detect
-Content-Type: multipart/form-data
-
-# 업로드: 이미지 파일들 (최대 2GB)
-# 결과: GPS 좌표가 포함된 CSV 파일
+또는 pip:
+```bash
+pip install -r api/requirements.txt
 ```
 
-#### **⚙️ 멀티스케일 데이터 전처리 API**  
-```http
-POST /api/v1/preprocessing/create-dataset
-Content-Type: multipart/form-data
+### 3. 환경 변수 설정 (AI 챗봇 사용 시)
 
-# 업로드: GeoTIFF + TFW + CSV
-# 결과: 멀티스케일 적응적 바운딩박스 학습용 데이터셋 (ZIP)
-# 특징: GPS 밀도 기반으로 16~128px 크기 자동 조절
+`.env` 파일 생성:
+```bash
+OPENAI_API_KEY=sk-proj-your_api_key_here
+OPENAI_MODEL=gpt-4o-mini
 ```
 
-#### **🔗 다중 데이터셋 병합 API**
-```http
-POST /api/v1/preprocessing/merge-datasets  
-Content-Type: multipart/form-data
+### 4. 서버 실행
 
-# 업로드: 여러 지역의 데이터셋 ZIP 파일들
-# 결과: 통합된 대용량 학습 데이터셋
-# 예시: 6개 지역 → 1,155개 타일 통합
+```bash
+poetry run python api/run_server.py
 ```
 
-#### **📊 결과 시각화 API**
-```http
-POST /api/v1/visualization/auto-detect-and-visualize
-Content-Type: multipart/form-data
+서버가 켜지면 http://localhost:8000/docs 에서 Swagger UI로 API를 테스트할 수 있습니다.
 
-# 업로드: 이미지 파일
-# 결과: 자동 탐지 + 바운딩박스 시각화 이미지
-# 설정: conf=0.16, iou=0.45 (촘촘한 피해목 개별 탐지)
+처음 실행할 때 knowledge_base의 파일들을 읽어서 임베딩을 만드는데 10초 정도 걸립니다.
+한번 만들어지면 `embeddings_cache.pkl` 파일로 캐싱처리되어 다음부턴 좀 더 빨라집니다.
+
+## API 사용법
+
+### 피해목 탐지 API
+
+```bash
+curl -X POST "http://localhost:8000/api/v1/inference/detect" \
+  -F "images_zip=@forest_images.zip" \
+  -F "confidence=0.16" \
+  -F "iou_threshold=0.45" \
+  -F "save_visualization=true"
 ```
 
-### 📋 API 사용 예시
+결과:
+- CSV 파일 (탐지 결과 + GPS 좌표)
+- 시각화 이미지 (바운딩박스 표시)
 
-```python
-import requests
+### 추론용 타일 분할 API
 
-# 🎯 피해목 탐지 API 호출 (최적화된 설정)
-url = "http://localhost:8000/api/v1/inference/detect"
-files = {"images_zip": open("forest_tiles.zip", "rb")}
-data = {
-    "confidence": 0.16,      # 민감한 탐지
-    "iou_threshold": 0.45,   # 촘촘한 피해목 개별 탐지
-    "save_visualization": True
-}
-
-response = requests.post(url, files=files, data=data)
-result = response.json()
-
-print(f"탐지된 피해목: {result['total_detections']}개")
-
-# 🧠 멀티스케일 데이터셋 생성 API 호출
-url = "http://localhost:8000/api/v1/preprocessing/create-dataset" 
-files = {
-    "geotiff_file": open("forest_map.tif", "rb"),
-    "tfw_file": open("forest_map.tfw", "rb"),
-    "csv_file": open("gps_coordinates.csv", "rb")
-}
-data = {
-    "tile_size": 512,        # 타일 크기
-    "file_prefix": "region1" # 파일 접두사
-}
-
-response = requests.post(url, files=files, data=data)
-print("멀티스케일 적응적 데이터셋 생성 완료!")
-print(f"결과 파일: {result['csv_file']}")
+```bash
+curl -X POST "http://localhost:8000/api/v1/preprocessing/tile-for-inference" \
+  -F "image_file=@big_forest_map.tif" \
+  -F "tile_size=1024"
 ```
 
-### 🏠 API 접속 주소
-- **Swagger UI**: http://localhost:8000/docs
-- **ReDoc**: http://localhost:8000/redoc  
-- **헬스체크**: http://localhost:8000/health
+결과: ZIP 파일 (타일 이미지들)
 
----
+### AI 챗봇 API
 
-## 🎓 Google Colab 학습 가이드
+```bash
+curl -X POST "http://localhost:8000/api/v1/ai-analysis/simple-chat" \
+  -d "question=소나무재선충병이란?"
+```
 
-### 📋 4단계 학습 프로세스
-
-| 단계 | 내용 | 소요시간 |
-|------|------|----------|
-| **1단계** | 환경 설정 + ZIP 데이터 자동 탐지 | 5분 |
-| **1.5단계** | 데이터 전처리 + 24px 최적화 | 10분 |
-| **2단계** | YOLOv11s 모델 학습 | 1-2시간 |
-| **3-4단계** | 성능 평가 + 결과 분석 | 10분 |
-
-### 🔧 하이퍼파라미터 최적화
-
-**성능별 권장 설정:**
-
-```python
-# 기본 성능 (mAP 0.6-0.8)
-training_config = {
-    'epochs': 200,
-    'lr0': 0.0001,
-    'batch': 8,
-    'patience': 75
-}
-
-# 고급 성능 (mAP 0.8-0.9+)  
-training_config = {
-    'epochs': 300,
-    'lr0': 0.00005,
-    'batch': 12,
-    'patience': 100,
-    'weight_decay': 0.0005
+결과:
+```json
+{
+  "success": true,
+  "ai_answer": "소나무재선충병은 소나무재선충이라는 벌레가 원인이 되어...",
+  "knowledge_sources_used": 3,
+  "model_info": {
+    "type": "Knowledge Base RAG 챗봇",
+    "llm_model": "gpt-4o-mini",
+    "search_method": "FAISS Semantic Search"
+  }
 }
 ```
 
-### 📈 학습 모니터링
+## AI 챗봇
 
-Colab에서 실시간으로 확인 가능한 지표:
-- **Loss 곡선**: box_loss, cls_loss, dfl_loss
-- **성능 지표**: mAP@0.5, Precision, Recall  
-- **학습 진행**: GPU 메모리 사용량, 남은 시간
+탐지 시스템만 있으면 실제 사용하는 분들이 YOLO가 뭔지, 신뢰도가 뭔지 모를 수 있어서
+질문할 수 있는 챗봇을 추가했습니다.
 
----
+**작동 방식**
+1. 사용자가 질문 입력
+2. `knowledge_base/` 폴더의 문서들을 FAISS로 검색 (의미 기반)
+3. 관련도 높은 문서 3개 추출
+4. 문서 내용과 질문을 OpenAI API에 전송
+5. GPT-4o-mini가 답변 생성
 
-## 📊 결과 예시
+**질문 예시**
+```
+Q: YOLO가 뭐야?
+A: You Only Look Once의 약자로, 이미지에서 객체를 실시간으로 탐지하는 AI 기술입니다...
 
-### 🎯 탐지 결과 CSV
-```csv
-filename,x_center,y_center,confidence,longitude,latitude
-forest_01.jpg,1245.2,678.9,0.92,127.123456,37.654321
-forest_01.jpg,2145.8,1023.1,0.87,127.134567,37.645432
+Q: 신뢰도 70% 이상이면?
+A: 고신뢰도로 분류되어 즉시 방제 대상이 됩니다. GPS 좌표 기반으로 현장 방제팀이 파견됩니다...
 ```
 
-### 📊 추론 시각화 결과 및 conf 임계값 최적화 부분
+**지식 베이스 구성**
+- 무인항공기 딥러닝 탐지 논문 (PDF)
+- 신뢰도별 처리 가이드 (MD)
+- GPS 방제 계획 (MD)
+- 소나무재선충병 생태 특성 (MD)
+- 지역별 탐지 현황 (CSV)
+- 산림 관리 매뉴얼 (JSON)
+- 기타 설정 파일들
 
-<img width="512" alt="추론 시각화 예시" src="https://github.com/user-attachments/assets/3370d830-3b66-4d91-8965-6897b85fa86a" />
-<img width="512" alt="딥러닝 신뢰도 임계값" src="https://github.com/user-attachments/assets/3aeb8c9f-5da6-4f6d-81a2-9a2a409fd3a2" />
+총 8개 파일이고 PDF에서 텍스트 추출해서 사용합니다.
 
+## 모델 학습
+
+`notebooks/YOLOv11s_Smart_Training.ipynb` 파일을 Google Colab에서 열어서 실행하면 됩니다.
+로컬 환경에 GPU가 없어서 Colab의 무료 GPU(T4)를 사용했습니다.
+
+학습된 모델은 `models/colab_yolo/best.pt` 경로에 저장되어 있어야 합니다.
+
+## 설정값
+
+API에서 사용하는 추론 설정은 `api/config.py`에 있습니다:
+- confidence: 0.16 (낮게 설정해서 피해목 놓치지 않게)
+- iou_threshold: 0.45
+
+처음엔 confidence를 0.5로 했는데 놓치는 게 많아서 0.16으로 낮췄습니다.
+대신 오탐이 좀 늘어나긴 했지만 실제 현장에서는 확인 절차가 있으니까 괜찮다고 판단했습니다.
+
+## 개발하면서 겪은 문제들
+
+**1. 메모리 부족**
+- 큰 이미지를 통째로 처리하니까 메모리가 부족했습니다
+- 타일로 나눠서 처리하는 방식으로 변경했습니다
+- `preprocessing.py`에 타일 분할 API를 따로 만들었습니다
+
+**2. OpenAI API 비용**
+- GPT-5를 쓰기에는 좀 부담됐었음..
+- GPT-4o-mini로 변경했더니 훨씬 저렴해졌습니다 (1회당 $0.001)
+- 그래도 충분히 좋은 답변을 만들어줍니다.
+
+
+
+## 알아두면 좋은 점
+
+- GeoTIFF 파일이 아닌 일반 이미지는 GPS 좌표 변환이 안 됩니다
+- 서버 실행하면 knowledge_base 폴더의 파일들을 한번에 로드하는데 시간이 좀 걸림
+
+## 개선하고 싶은 부분
+
+- [ ] 모델 성능 향상 (더 많은 데이터로 재학습)
+- [ ] 배치 크기 조정 옵션 추가
+- [ ] 결과를 DB에 저장하는 기능
+- [ ] 프론트엔드 (지금은 Swagger UI만 있음)
+- [ ] 모델 로드하는데 걸리는 로딩 개선
+
+
+## 참고한 것들
+
+- Ultralytics YOLOv11 공식 문서
+- FastAPI 공식 튜토리얼
+- LangChain RAG 가이드
+- rasterio 예제 코드들
+- 무인항공기를 이용한 딥러닝 기반의 소나무재선충병 감염목 탐지 논문
+- LLM을 괴롭히며, 많이 물어본게 제일 도움 되기는 했습니다!
 ---
 
-## 💻 시스템 요구사항
-
-### 🌐 Google Colab (권장)
-- **무료 GPU**: T4/V100 사용 가능
-- **메모리**: 12GB RAM 기본 제공
-- **저장공간**: Google Drive 연동 (15GB 무료)
-- **브라우저**: Chrome, Firefox, Safari 등
-
-### 🏠 로컬 환경 (API 서버)
-- **Python**: 3.10+ 
-- **메모리**: 8GB+ (대용량 파일 처리용)
-- **저장공간**: 10GB+ 여유 공간
-- **GPU**: CUDA 호환 GPU (선택사항)
-
----
-
-## 💡 FAQ
-
-### ❓ **멀티스케일 적응적 바운딩박스란?**
-- **GPS 밀도 분석**: 각 피해목 주변 50px 반경 내 GPS 포인트 개수 계산
-- **적응적 크기**: 밀도가 높으면 16px (밀집), 낮으면 128px (외딴)
-- **성능 향상**: 고정 크기(32px) 대비 mAP 0.5 → 0.7+ 개선
-
-### ❓ **API 추론 설정 최적화는?**
-```python
-# 현재 최적화된 설정
-confidence = 0.16     # 민감한 탐지 (약한 신호도 포착)
-iou_threshold = 0.45  # 촘촘한 피해목도 개별 탐지
-```
-
-### ❓ **데이터셋은 어떻게 준비하나요?**
-```
-1. 멀티스케일 데이터셋 생성 (각 지역별)
-   └── GPS 밀도 기반 적응적 바운딩박스 자동 생성
-   
-2. 다중 데이터셋 병합 
-   └── 여러 지역 데이터를 하나로 통합
-   
-3. 최종 결과: 1,000개+ 타일 (권장)
-```
-
-### ❓ **성능이 낮으면 어떻게 하나요?**
-1. **캐시 버그 확인**: 각 지도별 독립적 GPS 처리 여부
-2. **더 많은 지역**: 다양한 지역 데이터셋 병합 (목표: 1,000개+ 타일)
-3. **설정 조정**: conf=0.16, iou=0.45로 최적화
-4. **멀티스케일 활용**: GPS 밀도 기반 적응적 바운딩박스
-
-### ❓ **캐시 버그가 뭔가요?**
-- **문제**: 첫 번째 지도의 GPS 좌표가 모든 후속 지도에 재사용
-- **증상**: 모든 지도에서 동일한 라벨 개수 (170~171개)
-- **해결**: 각 지도 처리 시 픽셀 좌표 캐시 초기화
-- **결과**: 지도별 독립적 GPS 처리, 올바른 라벨 개수
-
-### ❓ **결과 파일은 어디에 저장되나요?**
-- **Colab**: Google Drive `/pinetree_scan/results/`
-- **API**: `data/api_outputs/` 폴더
-  - `inference/`: 탐지 결과 CSV, 시각화 이미지
-  - `tiles/`: 멀티스케일 데이터셋 ZIP
-  - `visualizations/`: 바운딩박스 표시된 이미지
-
----
-
-## 📚 참고 자료
-
-- [YOLOv11 공식 문서](https://docs.ultralytics.com/)
-- [Google Colab 사용법](https://colab.research.google.com/)
-- [FastAPI 공식 문서](https://fastapi.tiangolo.com/)
-- [rasterio 공식 문서](https://rasterio.readthedocs.io/)
-
----
+만든 사람: Jeedoli
