@@ -280,20 +280,24 @@ def create_merged_visualization(all_results: List[DetectionResult], output_base:
         
         print(f"✅ 탐지 결과 그리기 완료: {detection_count}개 바운딩 박스")
         
-        # 합쳐진 시각화 이미지 저장
+        # 합쳐진 시각화 이미지 저장 (목표: 약 100MB JPG)
         merged_filename = f"merged_detection_{timestamp}.jpg"
         merged_path = os.path.join(output_base, merged_filename)
         
-        # 큰 이미지인 경우 크기 조정 (메모리 절약 및 파일 크기 최적화)
-        if total_width > 8192 or total_height > 8192:
-            scale = min(8192 / total_width, 8192 / total_height)
+        # 🎯 적절한 해상도로 조정 (목표 파일 크기: ~100MB)
+        MAX_DIMENSION = 16384  # 최대 16384px (약 100MB JPG 크기)
+        
+        if total_width > MAX_DIMENSION or total_height > MAX_DIMENSION:
+            scale = min(MAX_DIMENSION / total_width, MAX_DIMENSION / total_height)
             new_width = int(total_width * scale)
             new_height = int(total_height * scale)
-            print(f"🔧 이미지 크기 조정: {total_width}x{total_height} → {new_width}x{new_height}")
-            merged_image = cv2.resize(merged_image, (new_width, new_height))
+            print(f"🔧 파일 크기 최적화: {total_width}x{total_height} → {new_width}x{new_height} (목표: ~100MB)")
+            merged_image = cv2.resize(merged_image, (new_width, new_height), interpolation=cv2.INTER_LANCZOS4)
+        else:
+            print(f"💾 원본 크기로 저장: {total_width}x{total_height}px")
         
-        # 이미지 품질 설정으로 저장
-        cv2.imwrite(merged_path, merged_image, [cv2.IMWRITE_JPEG_QUALITY, 95])
+        # JPG 고품질 압축으로 저장 (품질 90: 선명도 유지 + 파일 크기 최적화)
+        cv2.imwrite(merged_path, merged_image, [cv2.IMWRITE_JPEG_QUALITY, 90])
         
         print(f"✅ 합쳐진 시각화 이미지 생성 완료: {merged_filename}")
         return merged_filename
@@ -324,37 +328,133 @@ def pixel_to_tm(px: float, py: float, tfw: List[float]) -> tuple:
     tm_y = D * px + E * py + F
     return tm_x, tm_y
 
-def get_tfw_from_tiff(image_path: str) -> Optional[List[float]]:
-    """TIFF 파일에서 지리참조 정보 추출하여 TFW 파라미터 생성
+def get_georeference_info(image_path: str) -> Optional[List[float]]:
+    """🗺️ 이미지에서 지리참조 정보 추출 (TIFF 메타데이터 또는 World File)
+    
+    지원 형식:
+    - TIFF: 내장 메타데이터 우선
+    - JPG/PNG/기타: World File (.jgw, .pgw, .wld, .tfw)
     
     Args:
-        image_path: TIFF 이미지 파일 경로
+        image_path: 이미지 파일 경로
         
     Returns:
         List[float]: TFW 파라미터 [A, D, B, E, C, F] 또는 None
     """
     try:
-        with rasterio.open(image_path) as src:
-            if src.transform:
-                # Affine 변환 매트릭스에서 TFW 파라미터 추출
-                transform = src.transform
-                # Affine 매트릭스: [a, b, c, d, e, f]
-                # TFW 형식: [A=a, D=d, B=b, E=e, C=c, F=f]
-                tfw_params = [
-                    transform.a,  # A: X 픽셀 크기
-                    transform.d,  # D: Y 픽셀 크기 (보통 음수)
-                    transform.b,  # B: 회전/기울기
-                    transform.e,  # E: 회전/기울기
-                    transform.c,  # C: 좌상단 X 좌표
-                    transform.f   # F: 좌상단 Y 좌표
-                ]
-                return tfw_params
+        # 1️⃣ TIFF 파일의 내장 메타데이터 우선 시도
+        if image_path.lower().endswith(('.tif', '.tiff')):
+            try:
+                with rasterio.open(image_path) as src:
+                    if src.transform is not None:
+                        transform = src.transform
+                        tfw_params = [
+                            transform.a,  # A: X 픽셀 크기
+                            transform.d,  # D: Y 픽셀 크기 (보통 음수)
+                            transform.b,  # B: 회전/기울기
+                            transform.e,  # E: 회전/기울기
+                            transform.c,  # C: 좌상단 X 좌표
+                            transform.f   # F: 좌상단 Y 좌표
+                        ]
+                        print(f"✅ TIFF 메타데이터에서 지리참조 정보 추출 성공")
+                        return tfw_params
+            except Exception as e:
+                print(f"⚠️ TIFF 메타데이터 읽기 실패, World File 검색 시도: {e}")
+        
+        # 2️⃣ 이미지별 World File 확장자 검색
+        world_file_extensions = {
+            '.tif': ['.tfw'],
+            '.tiff': ['.tfw'],
+            '.jpg': ['.jgw', '.jpgw'],
+            '.jpeg': ['.jgw', '.jpgw'],
+            '.png': ['.pgw', '.pngw'],
+            '.gif': ['.gfw'],
+            '.bmp': ['.bpw']
+        }
+        
+        base_path = os.path.splitext(image_path)[0]
+        img_ext = os.path.splitext(image_path)[1].lower()
+        
+        # 이미지별 World File 우선 검색
+        world_exts = world_file_extensions.get(img_ext, [])
+        for world_ext in world_exts:
+            world_path = base_path + world_ext
+            if os.path.exists(world_path):
+                params = load_world_file(world_path)
+                if params:
+                    print(f"✅ World File ({world_ext}) 에서 지리참조 정보 추출 성공")
+                    return params
+        
+        # 3️⃣ 범용 .wld 파일 검색 (모든 이미지에 사용 가능)
+        wld_path = base_path + '.wld'
+        if os.path.exists(wld_path):
+            params = load_world_file(wld_path)
+            if params:
+                print(f"✅ 범용 World File (.wld) 에서 지리참조 정보 추출 성공")
+                return params
+        
+        # 4️⃣ 별도 .tfw 파일 확인 (하위 호환성)
+        if img_ext not in ['.tif', '.tiff']:
+            tfw_path = base_path + '.tfw'
+            if os.path.exists(tfw_path):
+                params = load_world_file(tfw_path)
+                if params:
+                    print(f"✅ TFW 파일에서 지리참조 정보 추출 성공")
+                    return params
+        
+        # 지리참조 정보를 찾지 못함
+        print(f"⚠️ 지리참조 정보를 찾을 수 없습니다: {os.path.basename(image_path)}")
+        print(f"   💡 GPS 좌표 변환을 위해 다음 중 하나가 필요합니다:")
+        print(f"      - TIFF 파일 (지리참조 메타데이터 포함)")
+        print(f"      - 이미지 + World File (.jgw, .pgw, .wld 등)")
+        
     except Exception as e:
-        print(f"⚠️ 지리참조 정보 추출 실패: {e}")
+        print(f"❌ 지리참조 정보 추출 실패: {e}")
+    
     return None
 
+
+def get_tfw_from_tiff(image_path: str) -> Optional[List[float]]:
+    """[DEPRECATED] 하위 호환성을 위해 유지. get_georeference_info() 사용 권장
+    
+    Args:
+        image_path: 이미지 파일 경로
+        
+    Returns:
+        List[float]: TFW 파라미터 [A, D, B, E, C, F] 또는 None
+    """
+    return get_georeference_info(image_path)
+
+def load_world_file(world_path: str) -> Optional[List[float]]:
+    """World File에서 지리참조 파라미터 로드 (.tfw, .jgw, .pgw, .wld 등)
+    
+    World File 형식 (6줄):
+    1. X 방향 픽셀 크기
+    2. Y 방향 회전
+    3. X 방향 회전
+    4. Y 방향 픽셀 크기 (음수)
+    5. 좌상단 X 좌표
+    6. 좌상단 Y 좌표
+    
+    Args:
+        world_path: World File 경로
+        
+    Returns:
+        List[float]: TFW 파라미터 [A, D, B, E, C, F] 또는 None
+    """
+    try:
+        with open(world_path, 'r') as f:
+            lines = f.readlines()
+            if len(lines) >= 6:
+                params = [float(line.strip()) for line in lines[:6]]
+                return params
+    except Exception as e:
+        print(f"⚠️ World File 로드 실패 ({os.path.basename(world_path)}): {e}")
+    return None
+
+
 def load_tfw_file(tfw_path: str) -> Optional[List[float]]:
-    """TFW 파일에서 변환 파라미터 로드
+    """[DEPRECATED] 하위 호환성을 위해 유지. load_world_file() 사용 권장
     
     Args:
         tfw_path: TFW 파일 경로
@@ -362,14 +462,7 @@ def load_tfw_file(tfw_path: str) -> Optional[List[float]]:
     Returns:
         List[float]: TFW 파라미터 [A, D, B, E, C, F] 또는 None
     """
-    try:
-        with open(tfw_path, 'r') as f:
-            lines = f.readlines()
-            if len(lines) >= 6:
-                return [float(line.strip()) for line in lines[:6]]
-    except Exception as e:
-        print(f"⚠️ TFW 파일 로드 실패: {e}")
-    return None
+    return load_world_file(tfw_path)
 
 def draw_bounding_boxes_on_image(image, results):
     """바운딩 박스를 이미지에 그리는 함수 - 소나무 전용 최적화"""
@@ -485,10 +578,11 @@ async def list_available_models():
 async def detect_damaged_trees(
     images_zip: UploadFile = File(..., description="추론할 이미지들이 포함된 ZIP 파일"),
     model_path: str = Form(default=DEFAULT_WEIGHTS, description="사용할 YOLO 모델 경로"),
-    confidence: float = Form(default=config.DEFAULT_CONFIDENCE, description="탐지 신뢰도 임계값 (0.16)"),
+    confidence: float = Form(default=config.DEFAULT_CONFIDENCE, description="탐지 신뢰도 임계값 (0.1)"),
     iou_threshold: float = Form(default=config.DEFAULT_IOU_THRESHOLD, description="IoU 임계값 (중복 탐지 제거용)"),
     save_visualization: bool = Form(default=True, description="탐지 결과 시각화 이미지 저장 여부"),
     output_tm_coordinates: bool = Form(default=True, description="TM 좌표 변환 여부"),
+    enable_dense_detection: bool = Form(default=False, description="촘촘한 피해목 특화 추론 활성화 (멀티스케일 3단계)"),
     output_filename: str = Form(default="", description="사용자 지정 ZIP 파일명 (선택적, 공백이면 자동 생성)")
 ):
     """
@@ -507,10 +601,11 @@ async def detect_damaged_trees(
     **📋 매개변수:**
     - **images_zip**: 추론할 이미지들이 포함된 ZIP 파일 (.zip)
     - **model_path**: 사용할 YOLO 모델 파일 경로 (기본: 최적화된 소나무 모델)
-    - **confidence**: 탐지 신뢰도 임계값 (0.0-1.0, 기본값: 0.28)
-    - **iou_threshold**: IoU 임계값 (0.0-1.0, 중복 탐지 제거용, 기본값: 0.6)
+    - **confidence**: 탐지 신뢰도 임계값 (0.0-1.0, 기본값: 0.1)
+    - **iou_threshold**: IoU 임계값 (0.0-1.0, 중복 탐지 제거용, 기본값: 0.40)
     - **save_visualization**: 탐지 결과 시각화 이미지 저장 여부 (기본: True)
     - **output_tm_coordinates**: TM 좌표 변환 출력 여부 (기본: True)
+    - **enable_dense_detection**: 촘촘한 피해목 특화 추론 활성화 (False=단일 스케일, True=3단계 멀티스케일)
     
     **🎯 출력:**
     - 📊 탐지 통계 정보
@@ -596,105 +691,137 @@ async def detect_damaged_trees(
                     image_name = os.path.basename(image_path)
                     print(f"🔍 처리 중 ({idx}/{len(image_files)}): {image_name}")
                     
-                    # 🎯 촘촘한 피해목 특화 최적화된 3단계 추론
-                    print(f"  🔍 촘촘한 피해목 특화 추론 시작...")
+                    # 추론 모드에 따른 처리
+                    if enable_dense_detection:
+                        # 🎯 멀티스케일 추론 (해상도만 다르게, 사용자 지정 confidence/iou 사용)
+                        print(f"  🔍 멀티스케일 추론 시작 (사용자 지정값: conf={confidence}, iou={iou_threshold})...")
+                        
+                        # 1단계: 표준 해상도
+                        print(f"    📊 640px: conf={confidence}, iou={iou_threshold}")
+                        results_640 = model(image_path, imgsz=640, conf=confidence, iou=iou_threshold)
+                        
+                        # 2단계: 고해상도
+                        print(f"    📊 832px: conf={confidence}, iou={iou_threshold}")  
+                        results_832 = model(image_path, imgsz=832, conf=confidence, iou=iou_threshold)
+                        
+                        # 3단계: 초고해상도
+                        print(f"    📊 1024px: conf={confidence}, iou={iou_threshold}")
+                        results_1024 = model(image_path, imgsz=1024, conf=confidence, iou=iou_threshold)
+                        
+                        # 기존 변수명 호환성 유지 (결과 통합)
+                        primary_results = results_640
+                        dense_results = results_832  
+                        fine_results = results_1024
+                    else:
+                        # 🎯 단일 스케일 추론 (사용자 지정 confidence/iou 사용)
+                        print(f"  🔍 단일 스케일 추론: conf={confidence}, iou={iou_threshold}")
+                        primary_results = model(image_path, conf=confidence, iou=iou_threshold)
+                        dense_results = None
+                        fine_results = None
                     
-                    # 1단계: 표준 탐지 (일반적인 피해목)
-                    print(f"    📊 640px 표준: conf=0.15, iou=0.35")
-                    results_640 = model(image_path, imgsz=640, conf=0.15, iou=0.35)
-                    
-                    # 2단계: 고해상도 중밀도 (작은 피해목)
-                    print(f"    📊 832px 고해상도: conf=0.13, iou=0.2")  
-                    results_832 = model(image_path, imgsz=832, conf=0.13, iou=0.2)
-                    
-                    # 3단계: 초고해상도 초밀집 (촘촘한 피해목 전용) ⭐ 더욱 강화!
-                    print(f"    📊 1024px 초밀집: conf=0.10, iou=0.05 (극한 밀집)")
-                    results_1024 = model(image_path, imgsz=1024, conf=0.10, iou=0.05)
-                    
-                    # 기존 변수명 호환성 유지 (결과 통합)
-                    primary_results = results_640
-                    dense_results = results_832  
-                    fine_results = results_1024  # 촘촘한 지역용
-                    
-                    # TFW 정보 추출 (TM 좌표 변환용)
+                    # 🗺️ 지리참조 정보 추출 (TM 좌표 변환용) - TIFF/JPG/PNG + World File 지원
                     tfw_params = None
                     if output_tm_coordinates:
-                        tfw_params = get_tfw_from_tiff(image_path)
-                        if not tfw_params:
-                            # 동일 디렉토리에서 TFW 파일 찾기
-                            tfw_file_path = image_path.replace('.tif', '.tfw').replace('.tiff', '.tfw')
-                            if os.path.exists(tfw_file_path):
-                                tfw_params = load_tfw_file(tfw_file_path)
+                        tfw_params = get_georeference_info(image_path)
+                        if tfw_params is None:
+                            print(f"  ⚠️ TM 좌표 변환 불가: 지리참조 정보 없음 ({image_name})")
+                        else:
+                            print(f"  ✅ 지리참조 정보 확인: TM 좌표 변환 가능")
                     
                     # YOLOv11s 내장 NMS만 사용 (추가 NMS 불필요)
                     
-                    # 🧩 3단계 결과 통합 및 지능형 중복 제거
+                    # 🧩 결과 통합 및 지능형 중복 제거
                     all_detections_raw = []
                     
-                    # 1단계 결과 수집 (높은 우선순위)
-                    stage1_count = 0
-                    for result in primary_results:
-                        if result.boxes is not None:
-                            for box in result.boxes:
-                                x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-                                center_x, center_y = (x1 + x2) / 2, (y1 + y2) / 2
-                                conf = float(box.conf[0].cpu().numpy())
-                                all_detections_raw.append({
-                                    'center_x': center_x, 'center_y': center_y, 'conf': conf,
-                                    'box': box, 'stage': 1, 'priority': 3
-                                })
-                                stage1_count += 1
-                    
-                    # 2단계 결과 수집 (중간 우선순위)
-                    stage2_count = 0
-                    for result in dense_results:
-                        if result.boxes is not None:
-                            for box in result.boxes:
-                                x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-                                center_x, center_y = (x1 + x2) / 2, (y1 + y2) / 2
-                                conf = float(box.conf[0].cpu().numpy())
-                                all_detections_raw.append({
-                                    'center_x': center_x, 'center_y': center_y, 'conf': conf,
-                                    'box': box, 'stage': 2, 'priority': 2
-                                })
-                                stage2_count += 1
-                    
-                    # 3단계 결과 수집 (낮은 우선순위)
-                    stage3_count = 0
-                    for result in fine_results:
-                        if result.boxes is not None:
-                            for box in result.boxes:
-                                x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-                                center_x, center_y = (x1 + x2) / 2, (y1 + y2) / 2
-                                conf = float(box.conf[0].cpu().numpy())
-                                all_detections_raw.append({
-                                    'center_x': center_x, 'center_y': center_y, 'conf': conf,
-                                    'box': box, 'stage': 3, 'priority': 1
-                                })
-                                stage3_count += 1
-                    
-                    print(f"  📊 단계별 원시 탐지: 1단계={stage1_count}개, 2단계={stage2_count}개, 3단계={stage3_count}개")
-                    
-                    # 🎯 지능형 중복 제거 (우선순위 + 거리 기반)
-                    # 높은 우선순위(stage1) > 높은 신뢰도 > 낮은 stage 순으로 정렬
-                    all_detections_raw.sort(key=lambda x: (x['priority'], x['conf']), reverse=True)
-                    
-                    filtered_detections = []
-                    MIN_DISTANCE = 15  # 15픽셀 이내는 중복 (기존 25에서 줄임)
-                    
-                    for detection in all_detections_raw:
-                        is_duplicate = False
-                        for existing in filtered_detections:
-                            dist = ((detection['center_x'] - existing['center_x']) ** 2 + 
-                                   (detection['center_y'] - existing['center_y']) ** 2) ** 0.5
-                            if dist < MIN_DISTANCE:
-                                is_duplicate = True
-                                break
+                    if enable_dense_detection:
+                        # 멀티스케일: 3단계 결과 통합
+                        # 1단계 결과 수집 (높은 우선순위)
+                        stage1_count = 0
+                        for result in primary_results:
+                            if result.boxes is not None:
+                                for box in result.boxes:
+                                    x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                                    center_x, center_y = (x1 + x2) / 2, (y1 + y2) / 2
+                                    conf = float(box.conf[0].cpu().numpy())
+                                    all_detections_raw.append({
+                                        'center_x': center_x, 'center_y': center_y, 'conf': conf,
+                                        'box': box, 'stage': 1, 'priority': 3
+                                    })
+                                    stage1_count += 1
                         
-                        if not is_duplicate:
-                            filtered_detections.append(detection)
+                        # 2단계 결과 수집 (중간 우선순위)
+                        stage2_count = 0
+                        for result in dense_results:
+                            if result.boxes is not None:
+                                for box in result.boxes:
+                                    x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                                    center_x, center_y = (x1 + x2) / 2, (y1 + y2) / 2
+                                    conf = float(box.conf[0].cpu().numpy())
+                                    all_detections_raw.append({
+                                        'center_x': center_x, 'center_y': center_y, 'conf': conf,
+                                        'box': box, 'stage': 2, 'priority': 2
+                                    })
+                                    stage2_count += 1
+                        
+                        # 3단계 결과 수집 (낮은 우선순위)
+                        stage3_count = 0
+                        for result in fine_results:
+                            if result.boxes is not None:
+                                for box in result.boxes:
+                                    x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                                    center_x, center_y = (x1 + x2) / 2, (y1 + y2) / 2
+                                    conf = float(box.conf[0].cpu().numpy())
+                                    all_detections_raw.append({
+                                        'center_x': center_x, 'center_y': center_y, 'conf': conf,
+                                        'box': box, 'stage': 3, 'priority': 1
+                                    })
+                                    stage3_count += 1
+                        
+                        print(f"  📊 단계별 원시 탐지: 1단계={stage1_count}개, 2단계={stage2_count}개, 3단계={stage3_count}개")
+                    else:
+                        # 단일 스케일: primary_results만 사용
+                        stage1_count = 0
+                        stage2_count = 0
+                        stage3_count = 0
+                        for result in primary_results:
+                            if result.boxes is not None:
+                                for box in result.boxes:
+                                    x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                                    center_x, center_y = (x1 + x2) / 2, (y1 + y2) / 2
+                                    conf = float(box.conf[0].cpu().numpy())
+                                    all_detections_raw.append({
+                                        'center_x': center_x, 'center_y': center_y, 'conf': conf,
+                                        'box': box, 'stage': 1, 'priority': 1
+                                    })
+                                    stage1_count += 1
+                        
+                        print(f"  📊 단일 스케일 탐지: {stage1_count}개")
                     
-                    print(f"  🧹 중복 제거 후: {len(filtered_detections)}개 (거리 {MIN_DISTANCE}px 기준)")
+                    # 🎯 지능형 중복 제거 (멀티스케일 모드일 때만 필요)
+                    if enable_dense_detection:
+                        # 높은 우선순위(stage1) > 높은 신뢰도 > 낮은 stage 순으로 정렬
+                        all_detections_raw.sort(key=lambda x: (x['priority'], x['conf']), reverse=True)
+                        
+                        filtered_detections = []
+                        MIN_DISTANCE = 15  # 15픽셀 이내는 중복 (기존 25에서 줄임)
+                        
+                        for detection in all_detections_raw:
+                            is_duplicate = False
+                            for existing in filtered_detections:
+                                dist = ((detection['center_x'] - existing['center_x']) ** 2 + 
+                                       (detection['center_y'] - existing['center_y']) ** 2) ** 0.5
+                                if dist < MIN_DISTANCE:
+                                    is_duplicate = True
+                                    break
+                            
+                            if not is_duplicate:
+                                filtered_detections.append(detection)
+                        
+                        print(f"  🧹 중복 제거 후: {len(filtered_detections)}개 (거리 {MIN_DISTANCE}px 기준)")
+                    else:
+                        # 단일 스케일은 중복 제거 불필요 (YOLO 내장 NMS 사용)
+                        filtered_detections = all_detections_raw
+                        print(f"  ✅ YOLO 내장 NMS 사용: {len(filtered_detections)}개")
                     
                     # 결과 처리 및 밀도 기반 동적 바운딩박스 크기 최적화
                     image_results = []
@@ -725,10 +852,8 @@ async def detect_damaged_trees(
                                 if distance <= SEARCH_RADIUS:
                                     nearby_count += 1
                         
-                        # 🎯 실용적 접근: YOLO 예측 크기 그대로 사용 (시각화만 개선)
-                        # 실제 탐지 성능은 멀티스케일 해상도가 담당
-                        
-                        # 밀도 레벨 계산 (시각화용)
+                        # 🎯 YOLO 원본 예측 크기 그대로 사용 (크기 제한 없음)
+                        # 밀도 레벨 계산 (로깅용)
                         if nearby_count >= 5:
                             density_level = "매우촘촘"
                         elif nearby_count >= 3:
@@ -739,49 +864,12 @@ async def detect_damaged_trees(
                             density_level = "외딴"
                         
                         print(f"      🎯 주변 밀도: {nearby_count}개 → 밀도 레벨: {density_level}")
-                        print(f"      📏 YOLO 예측 크기: {orig_width:.1f}x{orig_height:.1f}px")
+                        print(f"      📏 YOLO 원본 예측 크기: {orig_width:.1f}x{orig_height:.1f}px")
                         
-                        # 🌲 소나무 피해목 실용적 크기: 밀도 기반 적응적 제한
-                        if density_level == "많이 밀집된 곳":
-                            MAX_SIZE = 20   # 촘촘한 지역은 작게
-                            TARGET_SIZE = 16
-                        elif density_level == "적당히 밀집된 곳":
-                            MAX_SIZE = 30   # 적당히 작게
-                            TARGET_SIZE = 22
-                        elif density_level == "보통":
-                            MAX_SIZE = 40   # 보통 크기
-                            TARGET_SIZE = 28
-                        else:  # 외딴
-                            MAX_SIZE = 50   # 외딴 지역은 크게 (명확 표시)
-                            TARGET_SIZE = 35
-                            
-                        MIN_SIZE = 8    # 최소 크기 보장
-                        
-                        # 극단적인 경우만 제한, 나머지는 YOLO 예측 그대로 사용
-                        if orig_width > MAX_SIZE or orig_height > MAX_SIZE:
-                            # 너무 큰 경우만 제한 (비율 유지하며 축소)
-                            scale_factor = min(MAX_SIZE / orig_width, MAX_SIZE / orig_height)
-                            new_width = orig_width * scale_factor
-                            new_height = orig_height * scale_factor
-                            print(f"      📐 대형목 크기 조정: {orig_width:.1f}x{orig_height:.1f} → {new_width:.1f}x{new_height:.1f}px")
-                        elif orig_width < MIN_SIZE or orig_height < MIN_SIZE:
-                            # 너무 작은 경우만 최소 크기 보장
-                            new_width = max(orig_width, MIN_SIZE)
-                            new_height = max(orig_height, MIN_SIZE)
-                            print(f"      📐 최소 크기 보장: {orig_width:.1f}x{orig_height:.1f} → {new_width:.1f}x{new_height:.1f}px")
-                        else:
-                            # TARGET_SIZE 기준으로 적절히 조정
-                            avg_size = (orig_width + orig_height) / 2
-                            if avg_size > TARGET_SIZE * 1.2:  # 20% 이상 크면 조정
-                                scale = TARGET_SIZE / avg_size
-                                new_width = orig_width * scale
-                                new_height = orig_height * scale
-                                print(f"      📐 적정 크기 조정: {orig_width:.1f}x{orig_height:.1f} → {new_width:.1f}x{new_height:.1f}px")
-                            else:
-                                # 적정 범위는 원본 사용
-                                new_width = orig_width
-                                new_height = orig_height
-                                print(f"      ✅ 적정 크기: {new_width:.1f}x{new_height:.1f}px")
+                        # ✅ 바운딩 박스 크기 제한 제거: YOLO 예측값 그대로 사용
+                        new_width = orig_width
+                        new_height = orig_height
+                        print(f"      ✅ 최종 크기: {new_width:.1f}x{new_height:.1f}px (크기 제한 없음)")
                         
                         conf = float(box.conf[0].cpu().numpy())
                         class_id = int(box.cls[0].cpu().numpy())
@@ -857,16 +945,9 @@ async def detect_damaged_trees(
                             print(f"  🖼️ 탐지없음 시각화 저장: {viz_filename}")
                     
                     # 추론 결과 메모리 해제
-                    del primary_results, dense_results, fine_results
-                    
-                    # 탐지가 매우 적으면 디버그 정보 출력
-                    if len(image_results) < 3:
-                        print(f"  🔍 탐지 수가 적음 - 극한 디버그")
-                        # 극한 낮은 신뢰도로 재시도
-                        extreme_results = model(image_path, conf=0.01, iou=0.1)
-                        extreme_count = sum(len(r.boxes) if r.boxes is not None else 0 for r in extreme_results)
-                        print(f"  🔍 극한 디버그 (conf=0.01, iou=0.1): {extreme_count}개 탐지")
-                        del extreme_results
+                    del primary_results
+                    if enable_dense_detection:
+                        del dense_results, fine_results
                     
                 except Exception as e:
                     failed_images.append(f"{os.path.basename(image_path)}: {str(e)}")
@@ -880,6 +961,7 @@ async def detect_damaged_trees(
                 
                 # 탐지 결과를 DataFrame으로 변환
                 results_data = []
+                tm_coords_count = 0
                 for idx, detection in enumerate(all_results, 1):
                     row = {
                         'no': idx,
@@ -896,6 +978,7 @@ async def detect_damaged_trees(
                     if detection.tm_x is not None and detection.tm_y is not None:
                         row['tm_x'] = detection.tm_x
                         row['tm_y'] = detection.tm_y
+                        tm_coords_count += 1
                     
                     results_data.append(row)
                 
@@ -903,6 +986,11 @@ async def detect_damaged_trees(
                 df = pd.DataFrame(results_data)
                 df.to_csv(csv_path, index=False, encoding='utf-8-sig')
                 csv_file_url = f"/api/v1/inference/download/{csv_filename}"
+                
+                # TM 좌표 통계 출력
+                print(f"📊 CSV 생성 완료: {len(all_results)}개 탐지 중 {tm_coords_count}개 TM 좌표 포함")
+                if tm_coords_count == 0:
+                    print(f"⚠️ TM 좌표 없음: 이미지에 지리참조 정보(.tfw, .jgw 또는 TIFF 메타데이터)가 필요합니다")
             
             # 합쳐진 시각화 이미지 생성
             merged_viz_filename = None
