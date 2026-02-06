@@ -22,7 +22,7 @@ DEFAULT_MODEL_PATH = MODELS_DIR / "colab_yolo" / "best.pt"
 # FALLBACK_MODEL_PATH는 제거 (실제 존재하는 모델만 사용)
 
 # 🎯 추론(Inference) API 설정
-DEFAULT_CONFIDENCE = 0.16  # 추론 시 탐지 신뢰도 임계값 (16%)
+DEFAULT_CONFIDENCE = 0.1  # 추론 시 탐지 신뢰도 임계값 (10%)
 DEFAULT_IOU_THRESHOLD = 0.40  # 추론 시 NMS IoU 임계값 (소나무 특화)
 
 # 📦 데이터셋 생성(Preprocessing) 설정
