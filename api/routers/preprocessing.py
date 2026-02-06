@@ -57,6 +57,15 @@ class InferenceTilingResponse(BaseModel):
     tile_info: List[InferenceTileInfo]
     download_url: Optional[str] = None
 
+class JpgTilingResponse(BaseModel):
+    success: bool
+    message: str
+    total_tiles: int
+    original_size: tuple
+    tile_size: int
+    download_url: Optional[str] = None
+    jpg_count: int
+
 class MergedDatasetResponse(BaseModel):
     success: bool
     message: str
@@ -546,25 +555,47 @@ async def preprocessing_status():
     }
 
 
-@router.post("/tile-for-inference", response_model=InferenceTilingResponse)
-async def create_inference_tiles(
-    image_file: UploadFile = File(..., description="원본 GeoTIFF 이미지"),
+@router.post("/tile-to-jpg", response_model=JpgTilingResponse)
+async def create_jpg_tiles(
+    image_file: UploadFile = File(..., description="원본 이미지 (TIFF, JPG, PNG)"),
     tile_size: int = Form(default=DEFAULT_TILE_SIZE, description="타일 크기 (픽셀)"),
     output_filename: str = Form(default="", description="사용자 지정 ZIP 파일명 (선택적, 공백이면 자동 생성)")
 ):
     """
-    추론용 타일 생성: 원본 이미지를 추론하기 위해 타일로 분할합니다.
-    원본 이미지만 분할하며, 지리참조 정보를 보존합니다.
+    🖼️ **TIFF/JPG/PNG → JPG 타일 변환 API**
     
-    - **image_file**: 원본 GeoTIFF 이미지 파일 (.tif/.tiff)
+    원본 이미지를 타일로 분할하고 JPG 형식으로만 저장합니다.
+    라벨링 작업이나 시각화용으로 사용하기 적합합니다.
+    
+    **지원 형식:**
+    - ✅ TIFF (.tif, .tiff)
+    - ✅ JPEG (.jpg, .jpeg)
+    - ✅ PNG (.png)
+    
+    **📋 주요 기능:**
+    - 이미지를 지정된 크기로 타일 분할
+    - JPG 형식으로만 저장 (원본 형식 미생성)
+    - 고품질 JPEG (95% 품질)
+    - ZIP 파일로 다운로드
+    
+    **🎯 매개변수:**
+    - **image_file**: 원본 이미지 파일
     - **tile_size**: 타일 한 변 크기 (기본: 1024픽셀)
-    - **output_filename**: 결과 ZIP 파일명 (선택적, 기본: 자동 생성)
+    - **output_filename**: 결과 ZIP 파일명 (선택적)
+    
+    **🎁 출력:**
+    - JPG 타일들이 포함된 ZIP 파일
+    - 타일 개수 및 원본 이미지 크기 정보
     """
     
     try:
-        # 파일 확장자 검증
-        if not image_file.filename.lower().endswith(('.tif', '.tiff')):
-            raise HTTPException(status_code=400, detail="이미지 파일은 TIFF 형식이어야 합니다.")
+        # 파일 확장자 검증 (다양한 형식 지원)
+        supported_extensions = ('.tif', '.tiff', '.jpg', '.jpeg', '.png')
+        if not image_file.filename.lower().endswith(supported_extensions):
+            raise HTTPException(
+                status_code=400,
+                detail=f"지원하지 않는 파일 형식입니다. 지원 형식: {', '.join(supported_extensions)}"
+            )
         
         # 임시 디렉토리 생성
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -574,6 +605,157 @@ async def create_inference_tiles(
             
             with open(image_path, "wb") as f:
                 shutil.copyfileobj(image_file.file, f)
+            
+            print(f"📤 업로드 완료: {image_file.filename}")
+            
+            # 출력 디렉토리 생성
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_base = DEFAULT_OUTPUT_DIR / f"jpg_tiles_{timestamp}"
+            jpg_output = output_base / "jpg"
+            
+            jpg_output.mkdir(parents=True, exist_ok=True)
+            
+            # JPG 전용 타일 분할 실행
+            jpg_count, original_size = process_jpg_only_tiles(
+                image_path, str(jpg_output), tile_size, timestamp
+            )
+            
+            # ZIP 파일 생성 (JPG만 포함)
+            zip_path = create_jpg_tiles_zip(output_base, timestamp, output_filename)
+            
+            return JpgTilingResponse(
+                success=True,
+                message=f"JPG 타일 변환 완료: {jpg_count}개 타일 생성",
+                total_tiles=jpg_count,
+                original_size=original_size,
+                tile_size=tile_size,
+                download_url=f"/api/v1/preprocessing/download/{os.path.basename(zip_path)}",
+                jpg_count=jpg_count
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"JPG 타일 생성 중 오류 발생: {str(e)}")
+
+
+@router.post("/tile-for-inference", response_model=InferenceTilingResponse)
+async def create_inference_tiles(
+    image_file: UploadFile = File(..., description="원본 이미지 또는 ZIP 파일 (이미지 + World File)"),
+    tile_size: int = Form(default=DEFAULT_TILE_SIZE, description="타일 크기 (픽셀)"),
+    output_filename: str = Form(default="", description="사용자 지정 ZIP 파일명 (선택적, 공백이면 자동 생성)")
+):
+    """
+    🎯 **추론용 타일 생성 API**
+    
+    원본 이미지를 추론하기 위해 타일로 분할합니다.
+    지리참조 정보를 보존하며, 다양한 이미지 형식을 지원합니다.
+    
+    **지원 형식:**
+    - ✅ TIFF (.tif, .tiff) - 단일 파일 업로드
+    - ✅ JPEG + World File - ZIP 파일로 업로드 (image.jpg + image.jgw/wld)
+    - ✅ PNG + World File - ZIP 파일로 업로드 (image.png + image.pgw/wld)
+    
+    **📋 업로드 방법:**
+    
+    **방법 1: TIFF 단일 파일 (지리참조 내장)**
+    ```
+    image_file: mountain.tif
+    ```
+    
+    **방법 2: JPG/PNG + World File (ZIP)**
+    ```
+    image_file: mountain.zip
+      ├── mountain.jpg (또는 .png)
+      └── mountain.wld (또는 .jgw, .pgw)
+    ```
+    
+    **📋 매개변수:**
+    - **image_file**: 원본 이미지 파일 또는 ZIP (이미지 + World File)
+    - **tile_size**: 타일 한 변 크기 (기본: 1024픽셀)
+    - **output_filename**: 결과 ZIP 파일명 (선택적)
+    """
+    
+    try:
+        # 임시 디렉토리 생성
+        with tempfile.TemporaryDirectory() as temp_dir:
+            
+            uploaded_filename = image_file.filename.lower()
+            
+            # 🔍 ZIP 파일인지 확인
+            if uploaded_filename.endswith('.zip'):
+                print(f"📦 ZIP 파일 감지: {image_file.filename}")
+                
+                # ZIP 파일 저장
+                zip_path = os.path.join(temp_dir, image_file.filename)
+                with open(zip_path, "wb") as f:
+                    shutil.copyfileobj(image_file.file, f)
+                
+                # ZIP 압축 해제
+                extract_dir = os.path.join(temp_dir, "extracted")
+                os.makedirs(extract_dir, exist_ok=True)
+                
+                with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                    zip_ref.extractall(extract_dir)
+                
+                # 이미지 파일 찾기 (macOS 숨김 파일 제외)
+                image_files = []
+                for root, dirs, files in os.walk(extract_dir):
+                    if '__MACOSX' in root:
+                        continue
+                    for file in files:
+                        if file.startswith('.') or file.startswith('._'):
+                            continue
+                        if file.lower().endswith(('.tif', '.tiff', '.jpg', '.jpeg', '.png')):
+                            image_files.append(os.path.join(root, file))
+                
+                if not image_files:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="ZIP 파일에서 이미지 파일을 찾을 수 없습니다. (.tif, .jpg, .png)"
+                    )
+                
+                if len(image_files) > 1:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"ZIP 파일에 이미지가 {len(image_files)}개 있습니다. 1개만 포함해야 합니다."
+                    )
+                
+                image_path = image_files[0]
+                print(f"  ✅ 이미지 발견: {os.path.basename(image_path)}")
+                
+                # World File도 함께 있는지 확인
+                base_path = os.path.splitext(image_path)[0]
+                possible_world_files = [
+                    base_path + '.wld',
+                    base_path + '.tfw',
+                    base_path + '.jgw',
+                    base_path + '.pgw'
+                ]
+                
+                found_world_files = [wf for wf in possible_world_files if os.path.exists(wf)]
+                if found_world_files:
+                    print(f"  ✅ World File 발견: {[os.path.basename(wf) for wf in found_world_files]}")
+                else:
+                    print(f"  ℹ️ World File 없음 - 이미지 내장 메타데이터 사용 시도")
+            
+            else:
+                # 단일 이미지 파일 업로드
+                supported_extensions = ('.tif', '.tiff', '.jpg', '.jpeg', '.png')
+                if not uploaded_filename.endswith(supported_extensions):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"지원하지 않는 파일 형식입니다. 지원 형식: {', '.join(supported_extensions)} 또는 .zip"
+                    )
+                
+                print(f"📄 단일 파일 업로드: {image_file.filename}")
+                
+                # 업로드 파일을 임시 디렉토리에 저장
+                image_path = os.path.join(temp_dir, image_file.filename)
+                with open(image_path, "wb") as f:
+                    shutil.copyfileobj(image_file.file, f)
             
             # 출력 디렉토리 생성 (간단한 날짜_시분 형식)
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M")
@@ -609,12 +791,89 @@ async def create_inference_tiles(
         raise HTTPException(status_code=500, detail=f"추론용 타일 생성 중 오류 발생: {str(e)}")
 
 
+def load_world_file(world_path: str) -> Optional[List[float]]:
+    """World File에서 지리참조 파라미터 로드"""
+    try:
+        with open(world_path, 'r') as f:
+            lines = f.readlines()
+            if len(lines) >= 6:
+                return [float(line.strip()) for line in lines[:6]]
+    except Exception as e:
+        print(f"⚠️ World File 로드 실패: {e}")
+    return None
+
+
+def save_world_file(world_path: str, params: List[float]):
+    """World File 저장 (6개 파라미터)"""
+    try:
+        with open(world_path, 'w') as f:
+            for param in params:
+                f.write(f"{param}\n")
+    except Exception as e:
+        print(f"⚠️ World File 저장 실패: {e}")
+
+
+def get_georeference_from_image(image_path: str) -> Optional[List[float]]:
+    """이미지에서 지리참조 정보 추출 (TIFF 메타데이터 또는 World File)"""
+    import os
+    
+    # 1. TIFF 내장 메타데이터 시도
+    if image_path.lower().endswith(('.tif', '.tiff')):
+        try:
+            with rasterio.open(image_path) as src:
+                if src.transform is not None:
+                    t = src.transform
+                    return [t.a, t.d, t.b, t.e, t.c, t.f]
+        except:
+            pass
+    
+    # 2. World File 검색
+    base = os.path.splitext(image_path)[0]
+    ext = os.path.splitext(image_path)[1].lower()
+    
+    world_exts = {
+        '.tif': ['.tfw'],
+        '.tiff': ['.tfw'],
+        '.jpg': ['.jgw', '.jpgw'],
+        '.jpeg': ['.jgw', '.jpgw'],
+        '.png': ['.pgw', '.pngw']
+    }
+    
+    # 이미지별 World File
+    for wext in world_exts.get(ext, []):
+        wpath = base + wext
+        if os.path.exists(wpath):
+            params = load_world_file(wpath)
+            if params:
+                print(f"✅ World File 발견: {os.path.basename(wpath)}")
+                return params
+    
+    # 범용 .wld
+    wld_path = base + '.wld'
+    if os.path.exists(wld_path):
+        params = load_world_file(wld_path)
+        if params:
+            print(f"✅ 범용 World File 발견: {os.path.basename(wld_path)}")
+            return params
+    
+    return None
+
+
 def process_inference_tiles(
     image_path: str, output_images: str, tile_size: int, timestamp: str
 ) -> tuple[List[InferenceTileInfo], tuple]:
-    """추론용 타일 분할 메인 로직 (라벨링 없음)"""
+    """추론용 타일 분할 메인 로직 (라벨링 없음) + World File 자동 생성"""
     
     tile_info = []
+    
+    # 🗺️ 원본 이미지의 지리참조 정보 확인
+    original_georeference = get_georeference_from_image(image_path)
+    has_georeference = original_georeference is not None
+    
+    if has_georeference:
+        print(f"🎯 지리참조 정보 확인 - 타일별 World File 생성 예정")
+    else:
+        print(f"⚠️ 지리참조 정보 없음 - GPS 좌표 변환 불가")
     
     with rasterio.open(image_path) as src:
         width, height = src.width, src.height
@@ -622,6 +881,8 @@ def process_inference_tiles(
         
         n_tiles_x = int(np.ceil(width / tile_size))
         n_tiles_y = int(np.ceil(height / tile_size))
+        
+        print(f"🔪 타일 분할: {width}x{height} → {n_tiles_x}x{n_tiles_y} = {n_tiles_x * n_tiles_y}개")
         
         for ty in range(n_tiles_y):
             for tx in range(n_tiles_x):
@@ -638,20 +899,51 @@ def process_inference_tiles(
                 
                 # 타일 이미지 저장 (지리참조 정보 보존)
                 tile_path = os.path.join(output_images, tile_name)
-                orig_affine = src.transform
-                tile_affine = orig_affine * Affine.translation(x0, y0)
                 
-                has_georeference = src.crs is not None and src.transform is not None
+                # Affine 변환 계산 (타일 오프셋 반영)
+                if src.transform is not None:
+                    orig_affine = src.transform
+                    tile_affine = orig_affine * Affine.translation(x0, y0)
+                else:
+                    tile_affine = None
                 
+                # TIFF 타일 저장
                 with rasterio.open(
                     tile_path, 'w',
                     driver='GTiff',
                     height=h, width=w, count=3,
                     dtype=src.dtypes[0],
-                    crs=src.crs,
-                    transform=tile_affine
+                    crs=src.crs if src.crs else None,
+                    transform=tile_affine if tile_affine else None
                 ) as dst:
                     dst.write(tile_img)
+                
+                # 🗺️ World File 자동 생성 (TIFF 메타데이터 + 별도 파일)
+                if has_georeference:
+                    # World File 파라미터 계산
+                    if tile_affine:
+                        tile_world_params = [
+                            tile_affine.a,  # X 픽셀 크기
+                            tile_affine.d,  # Y 회전
+                            tile_affine.b,  # X 회전
+                            tile_affine.e,  # Y 픽셀 크기
+                            tile_affine.c,  # 좌상단 X
+                            tile_affine.f   # 좌상단 Y
+                        ]
+                    else:
+                        # TIFF에 변환 정보가 없으면 원본 World File 기반 계산
+                        A, D, B, E, C, F = original_georeference
+                        tile_C = C + (x0 * A) + (y0 * B)
+                        tile_F = F + (x0 * D) + (y0 * E)
+                        tile_world_params = [A, D, B, E, tile_C, tile_F]
+                    
+                    # .tfw 파일 저장 (TIFF용)
+                    tfw_path = tile_path.replace('.tif', '.tfw')
+                    save_world_file(tfw_path, tile_world_params)
+                    
+                    # .wld 파일도 저장 (범용)
+                    wld_path = tile_path.replace('.tif', '.wld')
+                    save_world_file(wld_path, tile_world_params)
                 
                 # 타일 정보 추가
                 tile_info.append(InferenceTileInfo(
@@ -661,7 +953,111 @@ def process_inference_tiles(
                     has_georeference=has_georeference
                 ))
     
+    if has_georeference:
+        print(f"✅ 타일별 World File 생성 완료 (.tfw + .wld)")
+    
     return tile_info, original_size
+
+
+def process_jpg_only_tiles(
+    image_path: str, jpg_output: str, tile_size: int, timestamp: str
+) -> tuple[int, tuple]:
+    """
+    JPG 전용 타일 분할 로직 (TIFF 미생성, JPG만 생성)
+    
+    Args:
+        image_path: 원본 TIFF 이미지 경로
+        jpg_output: JPG 타일 출력 디렉토리
+        tile_size: 타일 크기 (픽셀)
+        timestamp: 타임스탬프 문자열
+    
+    Returns:
+        tuple[int, tuple]: (JPG 타일 개수, 원본 이미지 크기)
+    """
+    import cv2
+    
+    jpg_count = 0
+    
+    with rasterio.open(image_path) as src:
+        width, height = src.width, src.height
+        original_size = (width, height)
+        
+        n_tiles_x = int(np.ceil(width / tile_size))
+        n_tiles_y = int(np.ceil(height / tile_size))
+        
+        total_tiles = n_tiles_x * n_tiles_y
+        print(f"🎯 JPG 타일 분할 시작: {width}x{height} → {n_tiles_x}x{n_tiles_y} = {total_tiles}개 타일", flush=True)
+        
+        for ty in range(n_tiles_y):
+            for tx in range(n_tiles_x):
+                x0 = tx * tile_size
+                y0 = ty * tile_size
+                w = min(tile_size, width - x0)
+                h = min(tile_size, height - y0)
+                
+                window = Window(x0, y0, w, h)
+                
+                # RGB 3채널만 추출
+                tile_img = src.read([1, 2, 3], window=window)
+                
+                # JPG 타일 파일명 생성
+                jpg_tile_name = f"{timestamp}_tile_{tx}_{ty}.jpg"
+                jpg_tile_path = os.path.join(jpg_output, jpg_tile_name)
+                
+                # rasterio 배열 (C, H, W) → OpenCV 배열 (H, W, C) 변환
+                tile_img_bgr = np.transpose(tile_img, (1, 2, 0))  # (3, H, W) → (H, W, 3)
+                
+                # RGB → BGR 변환 (OpenCV는 BGR 순서)
+                tile_img_bgr = cv2.cvtColor(tile_img_bgr, cv2.COLOR_RGB2BGR)
+                
+                # JPG로 저장 (품질 95%)
+                cv2.imwrite(jpg_tile_path, tile_img_bgr, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                
+                jpg_count += 1
+                
+                # 진행상황 출력 (10% 단위)
+                if jpg_count % max(1, total_tiles // 10) == 0 or jpg_count == total_tiles:
+                    progress_pct = (jpg_count / total_tiles) * 100
+                    print(f"  📊 진행상황: {jpg_count}/{total_tiles} ({progress_pct:.1f}%) - JPG 생성 중", flush=True)
+    
+    print(f"✅ JPG 타일 분할 완료: {jpg_count}개 타일", flush=True)
+    
+    return jpg_count, original_size
+
+
+def create_jpg_tiles_zip(output_base: Path, timestamp: str, output_filename: str = "") -> str:
+    """생성된 JPG 타일만 ZIP 파일로 압축"""
+    
+    # 사용자 지정 파일명 또는 자동 생성
+    if output_filename.strip():
+        # 사용자가 지정한 파일명 사용 (.zip 확장자 자동 추가)
+        if not output_filename.endswith('.zip'):
+            zip_filename = f"{output_filename}.zip"
+        else:
+            zip_filename = output_filename
+    else:
+        # 기본 자동 생성 파일명
+        zip_filename = f"jpg_tiles_{timestamp}.zip"
+    
+    zip_path = DEFAULT_OUTPUT_DIR / zip_filename
+    
+    print(f"📦 ZIP 파일 생성 중: {zip_filename}", flush=True)
+    
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        # jpg 폴더만 압축
+        jpg_dir = output_base / "jpg"
+        if jpg_dir.exists():
+            jpg_files = list(jpg_dir.glob("*.jpg"))
+            print(f"  📁 JPG 파일 압축 중: {len(jpg_files)}개", flush=True)
+            
+            for jpg_file in jpg_files:
+                # ZIP 내부 경로를 jpg/파일명 형식으로 저장
+                archive_name = f"jpg/{jpg_file.name}"
+                zipf.write(jpg_file, archive_name)
+    
+    print(f"✅ ZIP 파일 생성 완료: {zip_path}", flush=True)
+    
+    return str(zip_path)
 
 
 def create_inference_tiles_zip(output_base: Path, timestamp: str, output_filename: str = "") -> str:
